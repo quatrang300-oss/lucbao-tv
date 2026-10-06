@@ -23,7 +23,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -81,6 +83,8 @@ import vn.lucbao.tv.ui.tvErrorText
 
 private val SPEEDS = listOf(1f, 1.25f, 1.5f, 2f, 0.75f)
 private const val HIDE_AFTER_MS = 5_000L
+/** Longer while the remote is in "Nhiều video hơn", so there is time to look around. */
+private const val HIDE_RELATED_MS = 10_000L
 
 private enum class FocusGoal { NONE, ROOT, PLAY, RELATED, RETRY }
 
@@ -116,6 +120,11 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
     val rootFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val relatedFocus = remember { FocusRequester() }
+    // "Nhiều video hơn" remembers where it was left when the overlay hides and comes back.
+    val relatedState = rememberLazyListState()
+    var relatedIndex by remember { mutableIntStateOf(0) }
+    var inRelated by remember { mutableStateOf(false) }
+    var skipShow by remember { mutableStateOf(false) }
     val retryFocus = remember { FocusRequester() }
 
     fun touch() {
@@ -131,6 +140,7 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
 
     fun hide() {
         overlay = false
+        inRelated = false
         goal = FocusGoal.ROOT
         focusTick++
     }
@@ -162,13 +172,18 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
     }
 
     // New video (e.g. picked from "Nhiều video hơn"): show its title for a moment.
-    LaunchedEffect(ui.video?.url?.let(::videoKey)) { show() }
+    LaunchedEffect(ui.video?.url?.let(::videoKey)) {
+        // Picked from "Nhiều video hơn": stay full screen, don't pop the overlay back up.
+        if (skipShow) skipShow = false else show()
+        relatedIndex = 0
+        relatedState.scrollToItem(0)
+    }
     LaunchedEffect(ui.error) { show(if (ui.error != null) FocusGoal.RETRY else FocusGoal.PLAY) }
 
     // Auto-hide while playing.
-    LaunchedEffect(overlay, lastInput, ui.isPlaying, qualityDialog, ui.error) {
+    LaunchedEffect(overlay, lastInput, ui.isPlaying, qualityDialog, ui.error, inRelated) {
         if (overlay && ui.isPlaying && !qualityDialog && ui.error == null) {
-            delay(HIDE_AFTER_MS)
+            delay(if (inRelated) HIDE_RELATED_MS else HIDE_AFTER_MS)
             hide()
         }
     }
@@ -293,10 +308,19 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
                 duration = duration,
                 playFocus = playFocus,
                 relatedFocus = relatedFocus,
+                relatedState = relatedState,
+                relatedIndex = relatedIndex,
+                onRelatedIndex = { i -> relatedIndex = i },
+                onRelatedRowFocus = { has -> inRelated = has },
                 retryFocus = retryFocus,
                 onSeek = { forward -> seekBy(forward) },
                 onQuality = { qualityDialog = true },
-                onPlay = { v -> onPlay(v) },
+                onPlay = { v ->
+                    // Hide "Nhiều video hơn" at once and play the pick full screen.
+                    if (videoKey(v.url) != ui.video?.url?.let(::videoKey)) skipShow = true
+                    hide()
+                    onPlay(v)
+                },
                 onClose = onClose,
             )
         }
@@ -318,6 +342,10 @@ private fun Overlay(
     duration: Long,
     playFocus: FocusRequester,
     relatedFocus: FocusRequester,
+    relatedState: LazyListState,
+    relatedIndex: Int,
+    onRelatedIndex: (Int) -> Unit,
+    onRelatedRowFocus: (Boolean) -> Unit,
     retryFocus: FocusRequester,
     onSeek: (Boolean) -> Unit,
     onQuality: () -> Unit,
@@ -439,15 +467,21 @@ private fun Overlay(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(start = TvEdge, top = 18.dp)
                 )
+                val related = ui.related.take(30)
+                val target = relatedIndex.coerceIn(0, related.lastIndex)
                 LazyRow(
+                    modifier = Modifier.onFocusChanged { onRelatedRowFocus(it.hasFocus) },
+                    state = relatedState,
                     contentPadding = PaddingValues(start = TvEdge, end = TvEdge, top = 10.dp, bottom = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    itemsIndexed(ui.related.take(30), key = { i, r -> "$i-${r.url}" }) { i, r ->
-                        TvCard(
-                            r, onClick = { onPlay(r) }, width = 168.dp,
-                            focusRequester = if (i == 0) relatedFocus else null
-                        )
+                    itemsIndexed(related, key = { i, r -> "$i-${r.url}" }) { i, r ->
+                        Box(Modifier.onFocusChanged { if (it.hasFocus) onRelatedIndex(i) }) {
+                            TvCard(
+                                r, onClick = { onPlay(r) }, width = 168.dp,
+                                focusRequester = if (i == target) relatedFocus else null
+                            )
+                        }
                     }
                 }
             }
