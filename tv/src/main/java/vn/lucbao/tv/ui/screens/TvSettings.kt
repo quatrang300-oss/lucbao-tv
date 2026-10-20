@@ -43,7 +43,7 @@ import vn.lucbao.tv.ui.theme.Luc
 import vn.lucbao.tv.ui.theme.LucIcons
 import vn.lucbao.tv.update.Updater
 
-private val QUALITIES = listOf(2160 to "4K", 1440 to "1440p", 1080 to "1080p", 720 to "720p", 480 to "480p")
+private val QUALITIES = listOf(4320 to "8K", 2160 to "4K", 1440 to "1440p", 1080 to "1080p", 720 to "720p", 480 to "480p")
 
 fun canAutoUpdate(context: Context): Boolean =
     runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
@@ -102,12 +102,36 @@ fun TvSettings() {
             }
         }
 
-        Section("Chất lượng mặc định", "Lục Bảo tự hạ xuống nếu TV không phát mượt mức này.") {
+        Section("Chất lượng mặc định", "Lục Bảo tự hạ xuống nếu TV không phát mượt mức này (8K chỉ có trên TV giải mã được 8K). Mạng yếu thì tự giảm độ nét một chút rồi tự nét lại.") {
             QUALITIES.forEach { (p, label) ->
                 val on = s.qualityWifi == p
                 TvButton(label, if (on) LucIcons.Check else null, selected = on) {
                     Prefs.update { it.copy(qualityWifi = p, qualityMobile = p) }
                 }
+            }
+        }
+
+        Section(
+            "Phụ đề tiếng Việt",
+            "Dùng phụ đề của video, YouTube tự dịch nếu không có sẵn tiếng Việt. Thuyết minh dùng giọng đọc tiếng Việt của TV."
+        ) {
+            listOf(0 to "Tắt", 1 to "Phụ đề", 2 to "Phụ đề + thuyết minh", 3 to "Chỉ thuyết minh").forEach { (m, label) ->
+                val on = s.vietnamese == m
+                TvButton(label, if (on) LucIcons.Check else null, selected = on) {
+                    vn.lucbao.tv.player.PlayerController.setVietnamese(m)
+                }
+            }
+        }
+
+        Section("Mục ở cột bên trái", "Trang chủ và Cài đặt luôn hiện.") {
+            listOf(
+                Triple("Tìm kiếm", s.tabSearch) { v: Boolean -> Prefs.update { it.copy(tabSearch = v) } },
+                Triple("Shorts", s.tabShorts) { v: Boolean -> Prefs.update { it.copy(tabShorts = v) } },
+                Triple("Nhạc", s.tabMusic) { v: Boolean -> Prefs.update { it.copy(tabMusic = v) } },
+                Triple("Đang theo dõi", s.tabFollowing) { v: Boolean -> Prefs.update { it.copy(tabFollowing = v) } },
+                Triple("Thư viện", s.tabLibrary) { v: Boolean -> Prefs.update { it.copy(tabLibrary = v) } },
+            ).forEach { (label, on, set) ->
+                TvButton(label, if (on) LucIcons.Check else null, selected = on) { set(!on) }
             }
         }
 

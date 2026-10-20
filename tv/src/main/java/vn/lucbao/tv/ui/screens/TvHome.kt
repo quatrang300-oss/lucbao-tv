@@ -89,6 +89,8 @@ fun TvHome(vm: AppViewModel, onPlay: (Video) -> Unit) {
                         .padding(horizontal = 8.dp, vertical = 2.dp)
                 )
                 Spacer(Modifier.weight(1f))
+                TvKidBadge { vn.lucbao.tv.kids.KidsStore.enter() }
+                Spacer(Modifier.width(16.dp))
                 Clock()
             }
         }

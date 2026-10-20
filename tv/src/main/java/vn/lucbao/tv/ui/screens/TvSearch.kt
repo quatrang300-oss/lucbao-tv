@@ -447,3 +447,61 @@ private fun SuggestionRow(text: String, query: String, icon: ImageVector, onClic
         Text(label, color = fg, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
+
+/** The Vietnamese on-screen keyboard, shared with other screens (Nhạc, kids' channels). */
+@Composable
+fun TvKeyboard(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    firstKey: FocusRequester? = null,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(GAP.dp)) {
+        KEYBOARD.forEachIndexed { r, row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(GAP.dp)) {
+                row.forEachIndexed { i, k ->
+                    TvKey(
+                        k,
+                        width = (KEY * k.span + GAP * (k.span - 1)).dp,
+                        focusRequester = if (r == 0 && i == 0) firstKey else null,
+                    ) {
+                        when (val a = k.action) {
+                            is KeyAction.Type -> onQueryChange(query + a.ch)
+                            KeyAction.Tone -> onQueryChange(cycleTone(query))
+                            KeyAction.Space -> if (query.isNotEmpty() && !query.endsWith(' ')) onQueryChange("$query ")
+                            KeyAction.Backspace -> if (query.isNotEmpty()) onQueryChange(query.dropLast(1))
+                            KeyAction.Clear -> onQueryChange("")
+                            KeyAction.Search -> onSearch()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The text being typed on [TvKeyboard]. */
+@Composable
+fun TvQueryField(query: String, hint: String, modifier: Modifier = Modifier) {
+    val c = Luc.colors
+    Row(
+        modifier
+            .width((KEY * 9 + GAP * 8).dp)
+            .height(50.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(c.card)
+            .border(2.dp, c.primary, RoundedCornerShape(14.dp))
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(LucIcons.Search, null, tint = c.muted, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(
+            query.ifEmpty { hint },
+            color = if (query.isEmpty()) c.muted else c.text,
+            fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false)
+        )
+        Box(Modifier.padding(start = 2.dp).width(2.dp).height(24.dp).background(c.primary))
+    }
+}

@@ -6,7 +6,11 @@ import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -48,7 +53,14 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -66,12 +78,18 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import vn.lucbao.tv.data.Format
 import vn.lucbao.tv.data.Library
+import vn.lucbao.tv.data.Prefs
 import vn.lucbao.tv.data.Video
 import vn.lucbao.tv.data.videoKey
+import vn.lucbao.tv.player.CaptionStatus
 import vn.lucbao.tv.player.PlayerController
+import vn.lucbao.tv.player.PlayerStats
+import vn.lucbao.tv.player.VoiceOver
 import vn.lucbao.tv.player.PlayerUi
 import vn.lucbao.tv.ui.TvButton
 import vn.lucbao.tv.ui.TvCard
@@ -81,15 +99,29 @@ import vn.lucbao.tv.ui.theme.Luc
 import vn.lucbao.tv.ui.theme.LucIcons
 import vn.lucbao.tv.ui.tvErrorText
 
-private val SPEEDS = listOf(1f, 1.25f, 1.5f, 2f, 0.75f)
+/** Playback speeds, 0.25x to 10x. */
+private val SPEEDS = listOf(
+    0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f, 2.5f, 3f, 3.5f, 4f,
+    4.5f, 5f, 5.5f, 6f, 6.5f, 7f, 7.5f, 8f, 8.5f, 9f, 9.5f, 10f,
+)
+
+/** The next speed up; after 10x it starts again at 0.25x. */
+private fun nextSpeed(s: Float): Float = SPEEDS.firstOrNull { it > s + 0.001f } ?: SPEEDS.first()
+
+private fun speedIndex(s: Float): Int =
+    SPEEDS.indices.minByOrNull { kotlin.math.abs(SPEEDS[it] - s) } ?: SPEEDS.indexOf(1f)
+
+/** "1x", "1.25x", "10x" */
+private fun speedText(s: Float): String =
+    (if (s == s.toInt().toFloat()) s.toInt().toString() else s.toString()) + "x"
+
+private fun speedButtonText(s: Float): String = if (s == 1f) "Tốc độ" else "Tốc độ " + speedText(s)
 private const val HIDE_AFTER_MS = 5_000L
 /** Longer while the remote is in "Nhiều video hơn", so there is time to look around. */
 private const val HIDE_RELATED_MS = 10_000L
 
 private enum class FocusGoal { NONE, ROOT, PLAY, RELATED, RETRY }
 
-private fun speedLabel(s: Float): String =
-    if (s == 1f) "Tốc độ 1×" else "Tốc độ " + ("%.2f".format(s)).trimEnd('0').trimEnd('.', ',').replace('.', ',') + "×"
 
 /**
  * Full-screen TV player.
@@ -112,6 +144,15 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
     var goal by remember { mutableStateOf(FocusGoal.PLAY) }
     var focusTick by remember { mutableIntStateOf(0) }
     var qualityDialog by remember { mutableStateOf(false) }
+    var ccDialog by remember { mutableStateOf(false) }
+    // Speed slider (OK held 1.5 s on "Tốc độ"): ◀ ▶ change the speed, closes after 3 s idle.
+    var speedRuler by remember { mutableStateOf(false) }
+    var rulerTouch by remember { mutableIntStateOf(0) }
+    val speedFocus = remember { FocusRequester() }
+    val rulerFocus = remember { FocusRequester() }
+    val showStats by PlayerController.showStats.collectAsStateWithLifecycle()
+    val caption by PlayerController.caption.collectAsStateWithLifecycle()
+    val settings by Prefs.state.collectAsStateWithLifecycle()
 
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
@@ -180,9 +221,27 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
     }
     LaunchedEffect(ui.error) { show(if (ui.error != null) FocusGoal.RETRY else FocusGoal.PLAY) }
 
+    // The speed slider closes 3 s after the last key press on it; the remote goes back to the button.
+    LaunchedEffect(speedRuler, rulerTouch) {
+        if (speedRuler) {
+            delay(60)
+            runCatching { rulerFocus.requestFocus() }
+            delay(3_000)
+            speedRuler = false
+        }
+    }
+    LaunchedEffect(speedRuler) {
+        if (!speedRuler && overlay) {
+            delay(60)
+            runCatching { speedFocus.requestFocus() }
+        }
+    }
+    // Another video: no slider.
+    LaunchedEffect(ui.video?.url) { speedRuler = false }
+
     // Auto-hide while playing.
-    LaunchedEffect(overlay, lastInput, ui.isPlaying, qualityDialog, ui.error, inRelated) {
-        if (overlay && ui.isPlaying && !qualityDialog && ui.error == null) {
+    LaunchedEffect(overlay, lastInput, ui.isPlaying, qualityDialog, ccDialog, ui.error, inRelated, speedRuler) {
+        if (overlay && ui.isPlaying && !qualityDialog && !ccDialog && !speedRuler && ui.error == null) {
             delay(if (inRelated) HIDE_RELATED_MS else HIDE_AFTER_MS)
             hide()
         }
@@ -204,6 +263,8 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
 
     BackHandler {
         when {
+            speedRuler -> speedRuler = false
+            ccDialog -> ccDialog = false
             qualityDialog -> qualityDialog = false
             overlay && ui.error == null -> hide()
             else -> onClose()
@@ -279,6 +340,25 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
                 .focusable()
         )
 
+        // Vietnamese subtitles, moved up while the controls are showing.
+        val line = caption
+        if (PlayerController.showsText(settings.vietnamese) && !line.isNullOrBlank() && ui.error == null) {
+            Text(
+                line, color = Color.White, fontSize = 26.sp, lineHeight = 34.sp, textAlign = TextAlign.Center,
+                maxLines = 3, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 80.dp)
+                    .padding(bottom = if (overlay) 260.dp else 48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black.copy(alpha = 0.62f))
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+        }
+        if (showStats && ui.error == null && ui.quality?.audioOnly != true) {
+            StatsOverlay(Modifier.align(Alignment.TopStart).padding(start = TvEdge, top = 110.dp))
+        }
+
         if (ui.loading) {
             CircularProgressIndicator(
                 color = c.primary, strokeWidth = 4.dp,
@@ -315,6 +395,13 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
                 retryFocus = retryFocus,
                 onSeek = { forward -> seekBy(forward) },
                 onQuality = { qualityDialog = true },
+                onCaptions = { ccDialog = true },
+                speedRuler = speedRuler,
+                speedFocus = speedFocus,
+                rulerFocus = rulerFocus,
+                onSpeedHold = { speedRuler = true; touch() },
+                onRulerTouch = { rulerTouch++; touch() },
+                onRulerClose = { speedRuler = false },
                 onPlay = { v ->
                     // Hide "Nhiều video hơn" at once and play the pick full screen.
                     if (videoKey(v.url) != ui.video?.url?.let(::videoKey)) skipShow = true
@@ -329,6 +416,12 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
     if (qualityDialog) {
         QualityDialog(ui, onDismiss = {
             qualityDialog = false
+            show()
+        })
+    }
+    if (ccDialog) {
+        CaptionsDialog(onDismiss = {
+            ccDialog = false
             show()
         })
     }
@@ -349,11 +442,23 @@ private fun Overlay(
     retryFocus: FocusRequester,
     onSeek: (Boolean) -> Unit,
     onQuality: () -> Unit,
+    onCaptions: () -> Unit,
+    speedRuler: Boolean,
+    speedFocus: FocusRequester,
+    rulerFocus: FocusRequester,
+    onSpeedHold: () -> Unit,
+    onRulerTouch: () -> Unit,
+    onRulerClose: () -> Unit,
     onPlay: (Video) -> Unit,
     onClose: () -> Unit,
 ) {
     val c = Luc.colors
     val v = ui.video ?: return
+    val loop by PlayerController.loopVideo.collectAsStateWithLifecycle()
+    val settings by Prefs.state.collectAsStateWithLifecycle()
+    // Chế độ Trẻ em: no following (a way out of the kids' list).
+    val kids by vn.lucbao.tv.kids.KidsStore.active.collectAsStateWithLifecycle()
+    val live = v.live || ui.details?.live == true
     val channels by Library.channels.collectAsStateWithLifecycle()
     val channelUrl = ui.details?.channelUrl ?: v.channelUrl
     val following = remember(channels, channelUrl) { Library.isFollowing(channelUrl) }
@@ -416,6 +521,16 @@ private fun Overlay(
                     }
                 }
             } else {
+                // Speed slider: left half, just above the time bar.
+                if (speedRuler && !live) {
+                    SpeedRuler(
+                        speed = ui.speed,
+                        focusRequester = rulerFocus,
+                        onTouch = onRulerTouch,
+                        onClose = onRulerClose,
+                        modifier = Modifier.padding(start = TvEdge, bottom = 6.dp).fillMaxWidth(0.5f)
+                    )
+                }
                 if (duration > 0 && !v.live) {
                     SeekRow(position, buffered, duration, onSeek)
                 } else if (v.live) {
@@ -425,7 +540,11 @@ private fun Overlay(
                     )
                 }
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = TvEdge).padding(top = 14.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = TvEdge)
+                        .padding(top = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
@@ -438,16 +557,24 @@ private fun Overlay(
                     ) { PlayerController.togglePlay() }
                     TvIconButton(LucIcons.Forward10, "Tới 10 giây") { onSeek(true) }
                     TvIconButton(LucIcons.Next, "Video tiếp theo") { PlayerController.next() }
-                    Spacer(Modifier.weight(1f))
-                    TvButton(ui.quality?.label ?: "Chất lượng", LucIcons.Tune) { onQuality() }
-                    TvButton(speedLabel(ui.speed), LucIcons.Speed) {
-                        val i = SPEEDS.indexOf(ui.speed)
-                        PlayerController.setSpeed(SPEEDS[(i + 1) % SPEEDS.size])
+                    Spacer(Modifier.width(28.dp))
+                    if (!live) {
+                        SpeedButton(
+                            text = speedButtonText(ui.speed),
+                            selected = ui.speed != 1f,
+                            focusRequester = speedFocus,
+                            onTap = { PlayerController.setSpeed(nextSpeed(PlayerController.ui.value.speed)) },
+                            onHold = onSpeedHold,
+                        )
                     }
-                    TvButton(
+                    TvButton("Lặp lại", LucIcons.RepeatOne, selected = loop) { PlayerController.setLoopVideo(!loop) }
+                    TvButton("Phụ đề", LucIcons.Subtitles, selected = settings.vietnamese > 0) { onCaptions() }
+                    TvButton(ui.quality?.label ?: "Chất lượng", LucIcons.Tune) { onQuality() }
+                    // Kids mode keeps the grown-ups' favourites and follows untouched.
+                    if (!kids) TvButton(
                         if (ui.favorite) "Đã thích" else "Yêu thích", LucIcons.Heart, selected = ui.favorite
                     ) { PlayerController.toggleFavorite() }
-                    if (channelUrl != null) {
+                    if (channelUrl != null && !kids) {
                         TvButton(
                             if (following) "Đang theo dõi" else "Theo dõi",
                             if (following) LucIcons.Check else LucIcons.PersonAdd,
@@ -556,7 +683,7 @@ private fun QualityDialog(ui: PlayerUi, onDismiss: () -> Unit) {
             if (ui.choices.isEmpty()) {
                 Text("Đang tải…", color = c.muted, fontSize = 14.sp)
             }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.height(320.dp)) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.height(280.dp)) {
                 itemsIndexed(ui.choices, key = { _, q -> q.label }) { i, q ->
                     val selected = q.label == ui.quality?.label
                     val label = buildString {
@@ -574,6 +701,264 @@ private fun QualityDialog(ui: PlayerUi, onDismiss: () -> Unit) {
                         onDismiss()
                     }
                 }
+            }
+            val statsOn by PlayerController.showStats.collectAsStateWithLifecycle()
+            Text(
+                "Mạng yếu thì video tự giảm độ nét một chút, mạng ổn lại tự nét như mức đã chọn.",
+                color = c.muted, fontSize = 12.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 10.dp, bottom = 8.dp)
+            )
+            TvButton(
+                if (statsOn) "Ẩn thông số video" else "Hiện thông số video", LucIcons.Tune, selected = statsOn,
+                modifier = Modifier.fillMaxWidth()
+            ) { PlayerController.setShowStats(!statsOn) }
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { first.requestFocus() }
+    }
+}
+
+/**
+ * "Tốc độ" button. OK pressed and let go: the next speed. OK held for 1.5 s: [onHold]
+ * (the speed slider), and letting go then does nothing more.
+ */
+@Composable
+private fun SpeedButton(
+    text: String,
+    selected: Boolean,
+    focusRequester: FocusRequester,
+    onTap: () -> Unit,
+    onHold: () -> Unit,
+) {
+    val c = Luc.colors
+    val scope = rememberCoroutineScope()
+    var focused by remember { mutableStateOf(false) }
+    var holdJob by remember { mutableStateOf<Job?>(null) }
+    var held by remember { mutableStateOf(false) }
+    Text(
+        text,
+        color = if (focused) c.onPrimary else if (selected) c.primary else Color.White,
+        fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+        modifier = Modifier
+            .focusRequester(focusRequester)
+            .onFocusChanged {
+                focused = it.isFocused
+                // Back from the slider: its key-up went there, start clean.
+                if (it.isFocused) {
+                    holdJob?.cancel()
+                    holdJob = null
+                    held = false
+                }
+            }
+            .onKeyEvent { e ->
+                val center = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
+                if (!center) return@onKeyEvent false
+                when (e.type) {
+                    KeyEventType.KeyDown -> {
+                        if (holdJob == null && !held) {
+                            holdJob = scope.launch {
+                                delay(1_500)
+                                held = true
+                                onHold()
+                            }
+                        }
+                    }
+                    KeyEventType.KeyUp -> {
+                        holdJob?.cancel()
+                        holdJob = null
+                        if (!held) onTap()
+                        held = false
+                    }
+                }
+                true
+            }
+            .focusable()
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                when {
+                    focused -> c.primary
+                    selected -> c.primary.copy(alpha = 0.22f)
+                    else -> Color.White.copy(alpha = 0.10f)
+                }
+            )
+            .padding(horizontal = 16.dp, vertical = 9.dp)
+    )
+}
+
+/**
+ * Speed slider: a straight ruler with a mark per speed (longer at 1x, 2x, 3x…), only the
+ * current speed written. ◀ ▶ change the speed at once; OK closes it.
+ */
+@Composable
+private fun SpeedRuler(
+    speed: Float,
+    focusRequester: FocusRequester,
+    onTouch: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier,
+) {
+    val c = Luc.colors
+    val measurer = rememberTextMeasurer()
+    val index = speedIndex(speed)
+    // OK closes the slider on key-up, but only for a press that started here (the key-up of
+    // the long press that opened it also lands here).
+    var centerDown by remember { mutableStateOf(false) }
+    Canvas(
+        modifier
+            .height(64.dp)
+            .focusRequester(focusRequester)
+            .onKeyEvent { e ->
+                val center = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
+                if (center) {
+                    // Remotes repeat OK while held: only a fresh press counts.
+                    if (e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 0) centerDown = true
+                    else if (e.type == KeyEventType.KeyUp) {
+                        if (centerDown) onClose()
+                        centerDown = false
+                    }
+                    return@onKeyEvent true
+                }
+                if (e.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (e.key) {
+                    Key.DirectionLeft -> {
+                        val i = (speedIndex(PlayerController.ui.value.speed) - 1).coerceAtLeast(0)
+                        PlayerController.setSpeed(SPEEDS[i]); onTouch(); true
+                    }
+                    Key.DirectionRight -> {
+                        val i = (speedIndex(PlayerController.ui.value.speed) + 1).coerceAtMost(SPEEDS.lastIndex)
+                        PlayerController.setSpeed(SPEEDS[i]); onTouch(); true
+                    }
+                    Key.DirectionUp, Key.DirectionDown -> { onTouch(); true } // stay on the slider
+                    else -> false
+                }
+            }
+            .focusable()
+    ) {
+        val w = size.width
+        val base = size.height - 8.dp.toPx()
+        val step = w / SPEEDS.lastIndex
+        val shade = Color.Black.copy(alpha = 0.45f)
+        fun mark(x: Float, top: Float, bottom: Float, color: Color, width: Float, cap: StrokeCap = StrokeCap.Butt) {
+            drawLine(shade, Offset(x + 1f, top + 1.5f), Offset(x + 1f, bottom + 1.5f), width + 1.5f, cap)
+            drawLine(color, Offset(x, top), Offset(x, bottom), width, cap)
+        }
+        drawLine(Color.White.copy(alpha = 0.6f), Offset(0f, base), Offset(w, base), 1.5.dp.toPx())
+        SPEEDS.forEachIndexed { i, rate ->
+            val x = i * step
+            val major = rate == rate.toInt().toFloat()
+            mark(
+                x, base - (if (major) 16.dp else 9.dp).toPx(), base,
+                Color.White.copy(alpha = if (major) 0.95f else 0.7f), (if (major) 2.dp else 1.4.dp).toPx()
+            )
+            if (i < SPEEDS.lastIndex) mark(x + step / 2, base - 5.dp.toPx(), base, Color.White.copy(alpha = 0.4f), 1.dp.toPx())
+        }
+        val x = index * step
+        mark(x, base - 26.dp.toPx(), base + 4.dp.toPx(), c.primary, 4.dp.toPx(), StrokeCap.Round)
+        val label = measurer.measure(
+            speedText(SPEEDS[index]),
+            TextStyle(
+                color = c.primary, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                shadow = Shadow(Color.Black.copy(alpha = 0.7f), Offset(0f, 1f), 4f)
+            )
+        )
+        val lx = (x - label.size.width / 2f).coerceIn(0f, (w - label.size.width).coerceAtLeast(0f))
+        drawText(label, topLeft = Offset(lx, 0f))
+    }
+}
+
+/** "Thông số video": what is really playing and how well the network keeps up. */
+@Composable
+private fun StatsOverlay(modifier: Modifier) {
+    var st by remember { mutableStateOf(PlayerStats()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            st = PlayerController.stats()
+            delay(1_000)
+        }
+    }
+    fun mbps(bits: Long) = if (bits <= 0) "—" else String.format(java.util.Locale.ROOT, "%.1f Mb/s", bits / 1_000_000.0).replace('.', ',')
+    val playing = if (st.width > 0 && st.height > 0) {
+        "${st.width}×${st.height}" + (if (st.fps > 0) " · ${st.fps}fps" else "") +
+            (st.codec?.let { " · " + it.substringBefore('.') } ?: "")
+    } else "—"
+    Column(
+        modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.Black.copy(alpha = 0.68f))
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        listOf(
+            "Đang phát" to playing,
+            "Mức đã chọn" to (st.cap ?: "—"),
+            "Độ nặng video" to mbps(st.videoBitrate.toLong()),
+            "Tốc độ mạng" to mbps(st.network),
+            "Đã tải trước" to "${st.bufferedMs / 1000} giây",
+            "Số lần phải chờ tải" to st.stalls.toString(),
+        ).forEach { (k, v) ->
+            Row {
+                Text("$k: ", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
+                Text(v, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+/** Phụ đề tiếng Việt / thuyết minh, the same 4 modes as on the phone. */
+@Composable
+private fun CaptionsDialog(onDismiss: () -> Unit) {
+    val c = Luc.colors
+    val context = LocalContext.current
+    val settings by Prefs.state.collectAsStateWithLifecycle()
+    val info by PlayerController.captionInfo.collectAsStateWithLifecycle()
+    val voice by VoiceOver.state.collectAsStateWithLifecycle()
+    val first = remember { FocusRequester() }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .width(440.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(c.card)
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Dịch sang tiếng Việt", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Dùng phụ đề của video, YouTube tự dịch nếu video không có sẵn tiếng Việt. Áp dụng cho cả các video sau.",
+                color = c.muted, fontSize = 12.sp, lineHeight = 16.sp
+            )
+            listOf(
+                0 to "Tắt",
+                1 to "Phụ đề tiếng Việt",
+                2 to "Phụ đề + thuyết minh",
+                3 to "Chỉ thuyết minh (không hiện chữ)",
+            ).forEach { (mode, label) ->
+                val on = settings.vietnamese == mode
+                TvButton(
+                    label, if (on) LucIcons.Check else null, selected = on, modifier = Modifier.fillMaxWidth(),
+                    focusRequester = if (on) first else null
+                ) { PlayerController.setVietnamese(mode) }
+            }
+            if (settings.vietnamese > 0) {
+                val status = when (info.status) {
+                    CaptionStatus.LOADING -> "Đang tải phụ đề…"
+                    CaptionStatus.READY -> if (info.translated) "Phụ đề được YouTube dịch tự động." else "Video có sẵn phụ đề tiếng Việt."
+                    CaptionStatus.NONE -> "Video này không có phụ đề nên chưa dịch được."
+                    CaptionStatus.ERROR -> "Chưa tải được phụ đề. Chọn lại để thử lần nữa."
+                    CaptionStatus.UNSUPPORTED -> "Bộ phát YouTube đang được cập nhật để hỗ trợ tính năng này. Thử lại sau ít phút."
+                    CaptionStatus.OFF -> "Phụ đề sẽ hiện khi video bắt đầu phát."
+                }
+                Text(status, color = c.muted, fontSize = 12.sp)
+            }
+            // No way out to the TV's system settings from Chế độ Trẻ em.
+            if (!vn.lucbao.tv.kids.KidsStore.active.value && PlayerController.speaks(settings.vietnamese) &&
+                (voice == VoiceOver.State.NO_VOICE || voice == VoiceOver.State.NO_ENGINE)
+            ) {
+                Text(
+                    "TV chưa có giọng đọc tiếng Việt. Vào cài đặt Chuyển văn bản thành giọng nói của TV và tải giọng Tiếng Việt.",
+                    color = c.text, fontSize = 12.sp, lineHeight = 16.sp
+                )
+                TvButton("Mở cài đặt giọng đọc", LucIcons.Download) { VoiceOver.openVoiceSettings(context) }
             }
         }
     }
