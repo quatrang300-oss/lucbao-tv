@@ -43,7 +43,11 @@ import vn.lucbao.tv.data.Video
 import vn.lucbao.tv.player.PlayerController
 import vn.lucbao.tv.ui.screens.TvFollowing
 import vn.lucbao.tv.ui.screens.TvHome
+import vn.lucbao.tv.ui.screens.TvKids
+import vn.lucbao.tv.ui.screens.TvKidsTimeUp
 import vn.lucbao.tv.ui.screens.TvLibrary
+import vn.lucbao.tv.ui.screens.TvMusic
+import vn.lucbao.tv.ui.screens.TvShorts
 import vn.lucbao.tv.ui.screens.TvOnboarding
 import vn.lucbao.tv.ui.screens.TvPlayer
 import vn.lucbao.tv.ui.screens.TvSearch
@@ -52,7 +56,7 @@ import vn.lucbao.tv.ui.theme.Luc
 import vn.lucbao.tv.ui.theme.LucIcons
 import vn.lucbao.tv.ui.theme.LucTheme
 
-enum class TvScreen { SEARCH, HOME, FOLLOWING, LIBRARY, SETTINGS }
+enum class TvScreen { SEARCH, HOME, SHORTS, MUSIC, FOLLOWING, LIBRARY, SETTINGS }
 
 /** Read by screens before grabbing focus, so nothing under the full-screen player takes it. */
 internal object TvState {
@@ -85,17 +89,40 @@ fun TvRoot(vm: AppViewModel, voiceSignal: Int) {
             // Back from the player: give the remote a place to land again.
             if (wasOpen && !playerOpen) {
                 delay(80)
-                runCatching { contentFocus.requestFocus() }
+                if (!vn.lucbao.tv.kids.KidsStore.isTimeUp()) runCatching { contentFocus.requestFocus() }
             }
             wasOpen = playerOpen
         }
 
         val play: (Video) -> Unit = { v ->
-            PlayerController.play(v)
-            playerOpen = true
+            // Kids' time is up: nothing starts behind the time-up screen.
+            if (!vn.lucbao.tv.kids.KidsStore.isTimeUp()) {
+                PlayerController.play(v)
+                playerOpen = true
+            }
         }
+        val kidsOn by vn.lucbao.tv.kids.KidsStore.active.collectAsStateWithLifecycle()
+        val toastCtx = androidx.compose.ui.platform.LocalContext.current
+        LaunchedEffect(Unit) {
+            PlayerController.messages.collect { msg ->
+                android.widget.Toast.makeText(toastCtx, msg, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+        // Items turned off in Cài đặt leave the left column; an open one goes back to Trang chủ.
+        val shown = buildSet {
+            add(TvScreen.HOME)
+            add(TvScreen.SETTINGS)
+            if (settings.tabSearch) add(TvScreen.SEARCH)
+            if (settings.tabShorts) add(TvScreen.SHORTS)
+            if (settings.tabMusic) add(TvScreen.MUSIC)
+            if (settings.tabFollowing) add(TvScreen.FOLLOWING)
+            if (settings.tabLibrary) add(TvScreen.LIBRARY)
+        }
+        LaunchedEffect(screen, shown) { if (screen !in shown) screen = TvScreen.HOME }
+        // Leaving or entering kids mode closes the player.
+        LaunchedEffect(kidsOn) { playerOpen = false }
         LaunchedEffect(voiceSignal) {
-            if (voiceSignal > 0) {
+            if (voiceSignal > 0 && !kidsOn && settings.tabSearch) {
                 if (playerOpen) {
                     playerOpen = false
                     PlayerController.stop()
@@ -105,13 +132,22 @@ fun TvRoot(vm: AppViewModel, voiceSignal: Int) {
             }
         }
 
+        // Registered before the screens so their own Back (album page, search…) comes first.
+        BackHandler(enabled = !(playerOpen && ui.video != null) && screen != TvScreen.HOME && !kidsOn) { screen = TvScreen.HOME }
         Box(Modifier.fillMaxSize().background(c.surface)) {
-            Row(Modifier.fillMaxSize()) {
-                Rail(screen) { screen = it }
+            if (kidsOn) {
+                // Chế độ Trẻ em replaces everything until a parent leaves it with the PIN.
+                Box(Modifier.fillMaxSize().focusRequester(contentFocus).focusGroup()) {
+                    TvKids(playerOpen = playerOpen && ui.video != null, onPlay = play)
+                }
+            } else Row(Modifier.fillMaxSize()) {
+                Rail(screen, shown) { screen = it }
                 Box(Modifier.weight(1f).fillMaxHeight().focusRequester(contentFocus).focusGroup()) {
                     when (screen) {
                         TvScreen.HOME -> TvHome(vm, onPlay = play)
                         TvScreen.SEARCH -> TvSearch(vm, voicePending, onVoiceHandled = { voicePending = false }, onPlay = play)
+                        TvScreen.SHORTS -> TvShorts(active = !(playerOpen && ui.video != null), onOpenVideo = play)
+                        TvScreen.MUSIC -> TvMusic(onOpenPlayer = { playerOpen = true })
                         TvScreen.FOLLOWING -> TvFollowing(vm, onPlay = play)
                         TvScreen.LIBRARY -> TvLibrary(onPlay = play)
                         TvScreen.SETTINGS -> TvSettings()
@@ -123,25 +159,29 @@ fun TvRoot(vm: AppViewModel, voiceSignal: Int) {
                     ui = ui,
                     onClose = {
                         playerOpen = false
-                        PlayerController.stop()
+                        // Back from "Xem video" in Nhạc: the songs keep playing.
+                        if (PlayerController.queue.value.music) PlayerController.backToMusic() else PlayerController.stop()
                     },
                     onPlay = play,
                 )
             }
+            // Kids' time is up: covers everything (also the player) until a parent gives more time.
+            if (kidsOn) TvKidsTimeUp(onTimeUp = { playerOpen = false })
         }
-        BackHandler(enabled = !(playerOpen && ui.video != null) && screen != TvScreen.HOME) { screen = TvScreen.HOME }
     }
 }
 
 @Composable
-private fun Rail(current: TvScreen, onSelect: (TvScreen) -> Unit) {
+private fun Rail(current: TvScreen, shown: Set<TvScreen>, onSelect: (TvScreen) -> Unit) {
     val items = listOf(
         TvScreen.SEARCH to LucIcons.Search,
         TvScreen.HOME to LucIcons.Home,
+        TvScreen.SHORTS to LucIcons.Shorts,
+        TvScreen.MUSIC to LucIcons.Music,
         TvScreen.FOLLOWING to LucIcons.PersonAdd,
         TvScreen.LIBRARY to LucIcons.Library,
         TvScreen.SETTINGS to LucIcons.Tune,
-    )
+    ).filter { it.first in shown }
     Column(
         Modifier
             .width(68.dp)
