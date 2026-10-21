@@ -1,5 +1,6 @@
 package vn.lucbao.tv.engine
 
+import android.os.Build
 import android.content.Context
 import android.util.Log
 import dalvik.system.DexClassLoader
@@ -132,7 +133,14 @@ object EngineManager {
     private fun load(file: File, version: Int): Engine {
         // Android 14+ refuses to load writable code files.
         file.setReadOnly()
-        val loader = DexClassLoader(file.absolutePath, null, null, Engine::class.java.classLoader)
+        // Android 7.x: DexClassLoader needs a real folder for the compiled engine (null crashes there);
+        // Android 8+ ignores this argument.
+        val oatDir: String? = if (Build.VERSION.SDK_INT < 26) {
+            val dir = File(app.codeCacheDir, "engine-oat").apply { mkdirs() }
+            dir.listFiles()?.forEach { if (!it.name.startsWith(file.nameWithoutExtension + ".")) it.delete() }
+            dir.absolutePath
+        } else null
+        val loader = DexClassLoader(file.absolutePath, oatDir, null, Engine::class.java.classLoader)
         val instance = loader.loadClass(ENTRY_CLASS).getDeclaredConstructor().newInstance() as Engine
         check(instance.apiVersion() == Engine.API_VERSION) {
             "Engine api ${instance.apiVersion()} != ${Engine.API_VERSION}"
