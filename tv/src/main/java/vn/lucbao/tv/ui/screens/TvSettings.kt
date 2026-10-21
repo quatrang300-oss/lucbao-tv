@@ -1,5 +1,6 @@
 package vn.lucbao.tv.ui.screens
 
+import android.os.Build
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -46,17 +47,26 @@ import vn.lucbao.tv.update.Updater
 private val QUALITIES = listOf(4320 to "8K", 2160 to "4K", 1440 to "1440p", 1080 to "1080p", 720 to "720p", 480 to "480p")
 
 fun canAutoUpdate(context: Context): Boolean =
-    runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
+    if (Build.VERSION.SDK_INT >= 26) {
+        runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
+    } else {
+        // Android 7: one switch for the whole TV (Cài đặt → Bảo mật → Nguồn không xác định).
+        @Suppress("DEPRECATION")
+        runCatching {
+            AndroidSettings.Secure.getInt(context.contentResolver, AndroidSettings.Secure.INSTALL_NON_MARKET_APPS, 0) == 1
+        }.getOrDefault(false)
+    }
 
 /** Opens "install unknown apps" for Lục Bảo TV. Some TVs hide this screen: then explain where it is. */
 fun openInstallPermission(context: Context) {
     val opened = runCatching {
-        context.startActivity(
-            Intent(
-                AndroidSettings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                Uri.parse("package:${context.packageName}")
-            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
+        val intent = if (Build.VERSION.SDK_INT >= 26) {
+            Intent(AndroidSettings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
+        } else {
+            // Android 7 has no per-app switch: "Nguồn không xác định" lives in Bảo mật.
+            Intent(AndroidSettings.ACTION_SECURITY_SETTINGS)
+        }
+        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }.isSuccess
     if (!opened) {
         Toast.makeText(

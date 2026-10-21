@@ -61,7 +61,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import android.os.Build
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -172,9 +175,13 @@ fun TvShorts(active: Boolean, onOpenVideo: (Video) -> Unit) {
         val videoW = minOf(maxHeight * 9f / 16f, maxWidth * 0.5f)
         val sideW = (maxWidth - videoW) / 2
         val fullH = maxHeight
-        // Blurred picture of the short behind everything.
+        // Blurred picture of the short behind everything. blur() needs Android 12: older TVs get a
+        // tiny copy of the picture stretched out, which looks blurred too.
+        val pctx = LocalPlatformContext.current
         AsyncImage(
-            model = cur?.thumbnail, contentDescription = null, contentScale = ContentScale.Crop,
+            model = if (Build.VERSION.SDK_INT >= 31) cur?.thumbnail
+            else ImageRequest.Builder(pctx).data(cur?.thumbnail).size(24, 42).build(),
+            contentDescription = null, contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize().blur(40.dp)
         )
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
