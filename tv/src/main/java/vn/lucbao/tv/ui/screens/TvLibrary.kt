@@ -50,7 +50,7 @@ import vn.lucbao.tv.ui.theme.LucIcons
 
 /** Xem tiếp · Yêu thích · Kênh đang theo dõi. Everything is stored on this TV only. */
 @Composable
-fun TvLibrary(onPlay: (Video) -> Unit) {
+fun TvLibrary(onPlay: (Video) -> Unit, onSearch: () -> Unit) {
     val c = Luc.colors
     val history by Library.history.collectAsStateWithLifecycle()
     val favorites by Library.favorites.collectAsStateWithLifecycle()
@@ -71,15 +71,18 @@ fun TvLibrary(onPlay: (Video) -> Unit) {
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 28.dp, bottom = 40.dp)) {
         item(key = "title") {
-          Column {
-            Text(
-                "Thư viện", color = c.text, fontSize = 24.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(start = 24.dp, bottom = 4.dp)
-            )
-            Text(
-                "Lưu trên TV này, không cần tài khoản", color = c.muted, fontSize = 14.sp,
-                modifier = Modifier.padding(start = 24.dp)
-            )
+          Row(Modifier.fillMaxWidth().padding(end = TvEdge), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+              Text(
+                  "Thư viện", color = c.text, fontSize = 24.sp, fontWeight = FontWeight.Bold,
+                  modifier = Modifier.padding(start = 24.dp, bottom = 4.dp)
+              )
+              Text(
+                  "Lưu trên TV này, không cần tài khoản", color = c.muted, fontSize = 14.sp,
+                  modifier = Modifier.padding(start = 24.dp)
+              )
+            }
+            vn.lucbao.tv.ui.TvSearchBar("Tìm video…", Modifier.width(260.dp), onClick = onSearch)
           }
         }
         if (empty) {

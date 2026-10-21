@@ -62,6 +62,7 @@ import vn.lucbao.tv.player.PlayerController
 import vn.lucbao.tv.ui.TvButton
 import vn.lucbao.tv.ui.TvIconButton
 import vn.lucbao.tv.ui.focusIfVisible
+import vn.lucbao.tv.ui.tvGlass
 import vn.lucbao.tv.ui.theme.Luc
 import vn.lucbao.tv.ui.theme.LucIcons
 
@@ -369,9 +370,9 @@ private fun MusicPanel(modifier: Modifier, onOpenPlayer: () -> Unit) {
         }
     }
     if (timerDialog) {
-        Dialog(onDismissRequest = { timerDialog = false }) {
+        vn.lucbao.tv.ui.TvGlassDialog(onDismiss = { timerDialog = false }) {
             Column(
-                Modifier.width(320.dp).clip(RoundedCornerShape(18.dp)).background(c.card).padding(20.dp),
+                Modifier.width(320.dp).tvGlass().padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text("Hẹn giờ tắt nhạc", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Bold)

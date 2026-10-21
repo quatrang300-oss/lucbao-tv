@@ -125,7 +125,6 @@ fun TvSettings() {
 
         Section("Mục ở cột bên trái", "Trang chủ và Cài đặt luôn hiện.") {
             listOf(
-                Triple("Tìm kiếm", s.tabSearch) { v: Boolean -> Prefs.update { it.copy(tabSearch = v) } },
                 Triple("Shorts", s.tabShorts) { v: Boolean -> Prefs.update { it.copy(tabShorts = v) } },
                 Triple("Nhạc", s.tabMusic) { v: Boolean -> Prefs.update { it.copy(tabMusic = v) } },
                 Triple("Đang theo dõi", s.tabFollowing) { v: Boolean -> Prefs.update { it.copy(tabFollowing = v) } },

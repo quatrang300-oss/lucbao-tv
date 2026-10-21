@@ -94,6 +94,7 @@ import vn.lucbao.tv.player.PlayerUi
 import vn.lucbao.tv.ui.TvButton
 import vn.lucbao.tv.ui.TvCard
 import vn.lucbao.tv.ui.TvEdge
+import vn.lucbao.tv.ui.tvGlass
 import vn.lucbao.tv.ui.TvIconButton
 import vn.lucbao.tv.ui.theme.Luc
 import vn.lucbao.tv.ui.theme.LucIcons
@@ -137,11 +138,12 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
     val c = Luc.colors
     val exo = PlayerController.exo
 
-    var overlay by remember { mutableStateOf(true) }
+    // A picked video plays full screen at once: nothing over the picture until ▲ / OK / ▼.
+    var overlay by remember { mutableStateOf(false) }
     var lastInput by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var seekFlash by remember { mutableLongStateOf(0L) }
     var flashVisible by remember { mutableStateOf(false) }
-    var goal by remember { mutableStateOf(FocusGoal.PLAY) }
+    var goal by remember { mutableStateOf(FocusGoal.ROOT) }
     var focusTick by remember { mutableIntStateOf(0) }
     var qualityDialog by remember { mutableStateOf(false) }
     var ccDialog by remember { mutableStateOf(false) }
@@ -214,12 +216,13 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
 
     // New video (e.g. picked from "Nhiều video hơn"): show its title for a moment.
     LaunchedEffect(ui.video?.url?.let(::videoKey)) {
-        // Picked from "Nhiều video hơn": stay full screen, don't pop the overlay back up.
-        if (skipShow) skipShow = false else show()
+        // Every new video (search, Trang chủ, "Nhiều video hơn", autoplay) starts full screen.
+        skipShow = false
+        hide()
         relatedIndex = 0
         relatedState.scrollToItem(0)
     }
-    LaunchedEffect(ui.error) { show(if (ui.error != null) FocusGoal.RETRY else FocusGoal.PLAY) }
+    LaunchedEffect(ui.error) { if (ui.error != null) show(FocusGoal.RETRY) else if (overlay) show(FocusGoal.PLAY) }
 
     // The speed slider closes 3 s after the last key press on it; the remote goes back to the button.
     LaunchedEffect(speedRuler, rulerTouch) {
@@ -558,6 +561,7 @@ private fun Overlay(
                     TvIconButton(LucIcons.Forward10, "Tới 10 giây") { onSeek(true) }
                     TvIconButton(LucIcons.Next, "Video tiếp theo") { PlayerController.next() }
                     Spacer(Modifier.width(28.dp))
+                    TvButton("Phụ đề / Thuyết minh", LucIcons.Subtitles, selected = settings.vietnamese > 0) { onCaptions() }
                     if (!live) {
                         SpeedButton(
                             text = speedButtonText(ui.speed),
@@ -568,7 +572,6 @@ private fun Overlay(
                         )
                     }
                     TvButton("Lặp lại", LucIcons.RepeatOne, selected = loop) { PlayerController.setLoopVideo(!loop) }
-                    TvButton("Phụ đề", LucIcons.Subtitles, selected = settings.vietnamese > 0) { onCaptions() }
                     TvButton(ui.quality?.label ?: "Chất lượng", LucIcons.Tune) { onQuality() }
                     // Kids mode keeps the grown-ups' favourites and follows untouched.
                     if (!kids) TvButton(
@@ -670,12 +673,11 @@ private fun ProgressBar(position: Long, buffered: Long, duration: Long, focused:
 private fun QualityDialog(ui: PlayerUi, onDismiss: () -> Unit) {
     val c = Luc.colors
     val first = remember { FocusRequester() }
-    Dialog(onDismissRequest = onDismiss) {
+    vn.lucbao.tv.ui.TvGlassDialog(onDismiss = onDismiss) {
         Column(
             Modifier
                 .width(340.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(c.card)
+                .tvGlass()
                 .padding(20.dp)
         ) {
             Text("Chất lượng video", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -913,12 +915,11 @@ private fun CaptionsDialog(onDismiss: () -> Unit) {
     val info by PlayerController.captionInfo.collectAsStateWithLifecycle()
     val voice by VoiceOver.state.collectAsStateWithLifecycle()
     val first = remember { FocusRequester() }
-    Dialog(onDismissRequest = onDismiss) {
+    vn.lucbao.tv.ui.TvGlassDialog(onDismiss = onDismiss) {
         Column(
             Modifier
                 .width(440.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(c.card)
+                .tvGlass()
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {

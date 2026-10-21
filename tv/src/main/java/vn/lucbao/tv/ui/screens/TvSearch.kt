@@ -53,6 +53,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import vn.lucbao.tv.data.Video
@@ -63,14 +64,15 @@ import vn.lucbao.tv.ui.focusIfVisible
 import vn.lucbao.tv.ui.theme.Luc
 import vn.lucbao.tv.ui.theme.LucIcons
 import vn.lucbao.tv.ui.tvErrorText
-import java.text.Normalizer
 
 private const val KEY = 38
 private const val GAP = 6
+private const val COLS = 10
+private val FIELD_W = (KEY * COLS + GAP * (COLS - 1)).dp
 
 private sealed interface KeyAction {
     data class Type(val ch: String) : KeyAction
-    data object Tone : KeyAction
+    data object Shift : KeyAction
     data object Space : KeyAction
     data object Backspace : KeyAction
     data object Clear : KeyAction
@@ -81,97 +83,32 @@ private data class KeyDef(val label: String, val span: Int, val action: KeyActio
 
 private fun letters(s: String) = s.split(' ').map { KeyDef(it, 1, KeyAction.Type(it)) }
 
+/** Numbers on top, plain a–z; letters with accents open a small panel (the plain letter first). */
 private val KEYBOARD: List<List<KeyDef>> = listOf(
-    letters("a ă â b c d đ e ê"),
-    letters("f g h i j k l m n"),
-    letters("o ô ơ p q r s t u"),
-    letters("ư v w x y z 1 2 3"),
-    letters("4 5 6 7 8 9 0") + KeyDef("dấu", 2, KeyAction.Tone),
-    listOf(
-        KeyDef("khoảng trắng", 3, KeyAction.Space),
+    letters("1 2 3 4 5 6 7 8 9 0"),
+    letters("a b c d e f g h i j"),
+    letters("k l m n o p q r s t"),
+    letters("u v w x y z") + listOf(
+        KeyDef("Hoa", 2, KeyAction.Shift, LucIcons.Shift),
         KeyDef("xoá", 2, KeyAction.Backspace, LucIcons.Backspace),
-        KeyDef("xoá hết", 2, KeyAction.Clear),
-        KeyDef("TÌM", 2, KeyAction.Search, LucIcons.Search),
+    ),
+    listOf(
+        KeyDef("khoảng trắng", 4, KeyAction.Space),
+        KeyDef("xoá hết", 3, KeyAction.Clear),
+        KeyDef("TÌM", 3, KeyAction.Search, LucIcons.Search),
     ),
 )
 
-// ------------------------------------------------------------------ Vietnamese tone helper
-
-/** sắc, huyền, hỏi, ngã, nặng */
-private val TONES = charArrayOf('́', '̀', '̉', '̃', '̣')
-private const val VOWELS = "aeiouy"
-private const val BREVE = '̆'
-private const val CIRCUMFLEX = '̂'
-private const val HORN = '̛'
-
-/**
- * Cycles the tone of the last word: none → sắc → huyền → hỏi → ngã → nặng → none.
- * "dấu" lets people type every Vietnamese word with a remote.
- */
-internal fun cycleTone(text: String): String {
-    if (text.isBlank()) return text
-    val start = text.lastIndexOf(' ') + 1
-    val head = text.substring(0, start)
-    val word = Normalizer.normalize(text.substring(start), Normalizer.Form.NFD)
-    if (word.isEmpty()) return text
-
-    // Split into base letters, each with its combining marks.
-    data class Ch(val base: Char, val marks: MutableList<Char>)
-    val chars = ArrayList<Ch>()
-    for (ch in word) {
-        if (Character.getType(ch) == Character.NON_SPACING_MARK.toInt() && chars.isNotEmpty()) chars.last().marks.add(ch)
-        else chars.add(Ch(ch, mutableListOf()))
-    }
-    var current = -1
-    chars.forEach { c ->
-        val t = c.marks.firstOrNull { it in TONES }
-        if (t != null) current = TONES.indexOf(t)
-        c.marks.removeAll { it in TONES }
-    }
-    val next = if (current + 1 >= TONES.size) -1 else current + 1
-
-    if (next >= 0) {
-        val target = toneTarget(chars.map { it.base.lowercaseChar() to it.marks.toList() })
-        if (target < 0) return text
-        chars[target].marks.add(TONES[next])
-    }
-    val rebuilt = buildString { chars.forEach { c -> append(c.base); c.marks.forEach { append(it) } } }
-    return head + Normalizer.normalize(rebuilt, Normalizer.Form.NFC)
-}
-
-/** Index of the vowel that carries the tone (common Vietnamese rule set). */
-private fun toneTarget(chars: List<Pair<Char, List<Char>>>): Int {
-    val isVowel = { i: Int -> chars[i].first in VOWELS }
-    // Skip "qu" and "gi" (when followed by another vowel): their u / i are not the main vowel.
-    var from = 0
-    if (chars.size >= 2) {
-        val a = chars[0].first
-        val b = chars[1].first
-        if ((a == 'q' && b == 'u') || (a == 'g' && b == 'i' && chars.size > 2 && isVowel(2))) from = 2
-    }
-    val vowels = (from until chars.size).filter(isVowel)
-    if (vowels.isEmpty()) {
-        // "gi" alone, e.g. "gi" → "gì"
-        return (0 until chars.size).lastOrNull(isVowel) ?: -1
-    }
-    // A vowel with a hat/breve/horn wins (ơ beats ư in "ươ").
-    val marked = vowels.filter { i -> chars[i].second.any { it == BREVE || it == CIRCUMFLEX || it == HORN } }
-    if (marked.isNotEmpty()) return marked.last()
-    // Only the contiguous vowel cluster matters.
-    val cluster = ArrayList<Int>()
-    for (i in vowels) {
-        if (cluster.isEmpty() || i == cluster.last() + 1) cluster.add(i) else break
-    }
-    val endsWithVowel = cluster.last() == chars.size - 1
-    return when (cluster.size) {
-        1 -> cluster[0]
-        2 -> {
-            val pair = "${chars[cluster[0]].first}${chars[cluster[1]].first}"
-            if (!endsWithVowel || pair == "oa" || pair == "oe" || pair == "uy") cluster[1] else cluster[0]
-        }
-        else -> cluster[1]
-    }
-}
+/** OK on one of these letters opens the panel: one row per base vowel, then its 5 tones. */
+private val ACCENTS: Map<String, List<String>> = mapOf(
+    "a" to listOf("aáàảãạ", "ăắằẳẵặ", "âấầẩẫậ"),
+    "d" to listOf("dđ"),
+    "e" to listOf("eéèẻẽẹ", "êếềểễệ"),
+    "i" to listOf("iíìỉĩị"),
+    "o" to listOf("oóòỏõọ", "ôốồổỗộ", "ơớờởỡợ"),
+    "u" to listOf("uúùủũụ", "ưứừửữự"),
+    "y" to listOf("yýỳỷỹỵ"),
+)
 
 // ------------------------------------------------------------------ screen
 
@@ -243,17 +180,6 @@ fun TvSearch(vm: AppViewModel, voicePending: Boolean, onVoiceHandled: () -> Unit
         }
     }
 
-    fun press(a: KeyAction) {
-        when (a) {
-            is KeyAction.Type -> vm.onQueryChange(query + a.ch)
-            KeyAction.Tone -> vm.onQueryChange(cycleTone(query))
-            KeyAction.Space -> if (query.isNotEmpty() && !query.endsWith(' ')) vm.onQueryChange("$query ")
-            KeyAction.Backspace -> if (query.isNotEmpty()) vm.onQueryChange(query.dropLast(1))
-            KeyAction.Clear -> vm.clearSearch()
-            KeyAction.Search -> search(query)
-        }
-    }
-
     Column(
         Modifier
             .fillMaxSize()
@@ -267,7 +193,7 @@ fun TvSearch(vm: AppViewModel, voicePending: Boolean, onVoiceHandled: () -> Unit
         ) {
             Row(
                 Modifier
-                    .width((KEY * 9 + GAP * 8).dp)
+                    .width(FIELD_W)
                     .height(50.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(c.card)
@@ -296,19 +222,13 @@ fun TvSearch(vm: AppViewModel, voicePending: Boolean, onVoiceHandled: () -> Unit
 
         Row(Modifier.padding(start = 24.dp, end = TvEdge, top = 16.dp)) {
             // Keyboard
-            Column(verticalArrangement = Arrangement.spacedBy(GAP.dp)) {
-                KEYBOARD.forEachIndexed { r, row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(GAP.dp)) {
-                        row.forEachIndexed { i, k ->
-                            TvKey(
-                                k,
-                                width = (KEY * k.span + GAP * (k.span - 1)).dp,
-                                focusRequester = if (r == 0 && i == 0) firstKey else null,
-                            ) { press(k.action) }
-                        }
-                    }
-                }
-            }
+            TvKeyboard(
+                query = query,
+                onQueryChange = { vm.onQueryChange(it) },
+                onSearch = { search(query) },
+                firstKey = firstKey,
+                onClear = { vm.clearSearch() },
+            )
             Spacer(Modifier.width(28.dp))
             // Suggestions / recent searches
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -352,17 +272,25 @@ fun TvSearch(vm: AppViewModel, voicePending: Boolean, onVoiceHandled: () -> Unit
 }
 
 @Composable
-private fun TvKey(k: KeyDef, width: Dp, focusRequester: FocusRequester?, onClick: () -> Unit) {
+private fun TvKey(
+    k: KeyDef,
+    width: Dp,
+    focusRequesters: List<FocusRequester> = emptyList(),
+    label: String = k.label,
+    selected: Boolean = false,
+    accents: Boolean = false,
+    onClick: () -> Unit,
+) {
     val c = Luc.colors
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (focused) 1.1f else 1f, label = "key")
-    val accent = k.action == KeyAction.Search
+    val accent = k.action == KeyAction.Search || selected
     Box(
         Modifier
             .width(width)
             .height(KEY.dp)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .then(focusRequesters.fold(Modifier as Modifier) { m, r -> m.focusRequester(r) })
             .onFocusChanged { focused = it.isFocused }
             .clip(RoundedCornerShape(9.dp))
             .background(
@@ -382,10 +310,17 @@ private fun TvKey(k: KeyDef, width: Dp, focusRequester: FocusRequester?, onClick
                 Spacer(Modifier.width(5.dp))
             }
             Text(
-                k.label, color = fg,
+                label, color = fg,
                 fontSize = if (k.span == 1) 17.sp else 14.sp,
                 fontWeight = if (k.span == 1) FontWeight.Medium else FontWeight.SemiBold,
                 maxLines = 1
+            )
+        }
+        // A small dot: this letter has accented forms (OK opens them).
+        if (accents) {
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(top = 5.dp, end = 5.dp).size(5.dp)
+                    .clip(CircleShape).background(if (focused) c.onPrimary else c.primary)
             )
         }
     }
@@ -448,31 +383,109 @@ private fun SuggestionRow(text: String, query: String, icon: ImageVector, onClic
     }
 }
 
-/** The Vietnamese on-screen keyboard, shared with other screens (Nhạc, kids' channels). */
+/**
+ * The Vietnamese on-screen keyboard, shared by Tìm kiếm, Nhạc, Shorts and the kids' channels.
+ * OK on a letter with accents (a, d, e, i, o, u, y) opens a small panel: the plain letter is
+ * first (OK again types it), ◀ ▶ ▲ ▼ pick an accented one, Back closes. "Hoa" switches between
+ * lower and upper case, for the keyboard and the panel alike.
+ */
 @Composable
 fun TvKeyboard(
     query: String,
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     firstKey: FocusRequester? = null,
+    onClear: () -> Unit = { onQueryChange("") },
 ) {
+    var upper by remember { mutableStateOf(false) }
+    var accentOf by remember { mutableStateOf<String?>(null) }
+    var refocus by remember { mutableStateOf<String?>(null) }
+    val accentFocus = remember { ACCENTS.keys.associateWith { FocusRequester() } }
+    fun cased(s: String) = if (upper) s.uppercase() else s
+
+    // Back on the letter that opened the panel.
+    LaunchedEffect(refocus) {
+        val k = refocus ?: return@LaunchedEffect
+        delay(60)
+        runCatching { accentFocus[k]?.requestFocus() }
+        refocus = null
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(GAP.dp)) {
-        KEYBOARD.forEachIndexed { r, row ->
+        KEYBOARD.forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(GAP.dp)) {
-                row.forEachIndexed { i, k ->
+                row.forEach { k ->
+                    val letter = (k.action as? KeyAction.Type)?.ch
+                    val requesters = buildList<FocusRequester> {
+                        if (letter == "a" && firstKey != null) add(firstKey)
+                        letter?.let { accentFocus[it] }?.let { add(it) }
+                    }
                     TvKey(
                         k,
                         width = (KEY * k.span + GAP * (k.span - 1)).dp,
-                        focusRequester = if (r == 0 && i == 0) firstKey else null,
+                        focusRequesters = requesters,
+                        label = if (letter != null) cased(k.label) else k.label,
+                        selected = k.action == KeyAction.Shift && upper,
+                        accents = letter != null && letter in ACCENTS,
                     ) {
                         when (val a = k.action) {
-                            is KeyAction.Type -> onQueryChange(query + a.ch)
-                            KeyAction.Tone -> onQueryChange(cycleTone(query))
+                            is KeyAction.Type ->
+                                if (a.ch in ACCENTS) accentOf = a.ch else onQueryChange(query + cased(a.ch))
+                            KeyAction.Shift -> upper = !upper
                             KeyAction.Space -> if (query.isNotEmpty() && !query.endsWith(' ')) onQueryChange("$query ")
                             KeyAction.Backspace -> if (query.isNotEmpty()) onQueryChange(query.dropLast(1))
-                            KeyAction.Clear -> onQueryChange("")
+                            KeyAction.Clear -> onClear()
                             KeyAction.Search -> onSearch()
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    accentOf?.let { base ->
+        AccentPanel(
+            rows = ACCENTS.getValue(base).map { cased(it) },
+            onPick = { ch ->
+                onQueryChange(query + ch)
+                accentOf = null
+                refocus = base
+            },
+            onDismiss = {
+                accentOf = null
+                refocus = base
+            },
+        )
+    }
+}
+
+/** The small panel with the accented forms of one letter. */
+@Composable
+private fun AccentPanel(rows: List<String>, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    val c = Luc.colors
+    Dialog(onDismissRequest = onDismiss) {
+        val first = remember { FocusRequester() }
+        LaunchedEffect(Unit) {
+            delay(80)
+            runCatching { first.requestFocus() }
+        }
+        Column(
+            Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xF20A1E16))
+                .border(1.5.dp, c.primary, RoundedCornerShape(16.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(GAP.dp)
+        ) {
+            rows.forEachIndexed { r, row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(GAP.dp)) {
+                    row.forEachIndexed { i, ch ->
+                        val s = ch.toString()
+                        TvKey(
+                            KeyDef(s, 1, KeyAction.Type(s)),
+                            width = (KEY + 6).dp,
+                            focusRequesters = if (r == 0 && i == 0) listOf(first) else emptyList(),
+                        ) { onPick(s) }
                     }
                 }
             }
@@ -486,7 +499,7 @@ fun TvQueryField(query: String, hint: String, modifier: Modifier = Modifier) {
     val c = Luc.colors
     Row(
         modifier
-            .width((KEY * 9 + GAP * 8).dp)
+            .width(FIELD_W)
             .height(50.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(c.card)

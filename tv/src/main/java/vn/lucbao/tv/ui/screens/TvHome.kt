@@ -55,7 +55,7 @@ import java.util.Locale
 private const val NEW_MS = 3L * 24 * 3600 * 1000
 
 @Composable
-fun TvHome(vm: AppViewModel, onPlay: (Video) -> Unit) {
+fun TvHome(vm: AppViewModel, onPlay: (Video) -> Unit, onSearch: () -> Unit) {
     val c = Luc.colors
     val kiosks by vm.kiosks.collectAsStateWithLifecycle()
     val feeds by vm.feeds.collectAsStateWithLifecycle()
@@ -81,12 +81,9 @@ fun TvHome(vm: AppViewModel, onPlay: (Video) -> Unit) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 BrandMark(26.dp)
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    "0 QC", color = c.primary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .border(1.dp, c.primary.copy(alpha = 0.5f), RoundedCornerShape(50))
-                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                Spacer(Modifier.width(20.dp))
+                vn.lucbao.tv.ui.TvSearchBar(
+                    "Tìm video trên YouTube…", Modifier.weight(1f, fill = false).width(420.dp), onClick = onSearch
                 )
                 Spacer(Modifier.weight(1f))
                 TvKidBadge { vn.lucbao.tv.kids.KidsStore.enter() }

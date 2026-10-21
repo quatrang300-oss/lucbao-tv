@@ -50,7 +50,7 @@ private const val NEW_MS = 3L * 24 * 3600 * 1000
 
 /** Newest videos from the channels followed on this TV. */
 @Composable
-fun TvFollowing(vm: AppViewModel, onPlay: (Video) -> Unit) {
+fun TvFollowing(vm: AppViewModel, onPlay: (Video) -> Unit, onSearch: () -> Unit) {
     val c = Luc.colors
     val feeds by vm.feeds.collectAsStateWithLifecycle()
     val channels by Library.channels.collectAsStateWithLifecycle()
@@ -85,7 +85,12 @@ fun TvFollowing(vm: AppViewModel, onPlay: (Video) -> Unit) {
                     color = c.muted, fontSize = 14.sp
                 )
             }
+            vn.lucbao.tv.ui.TvSearchBar(
+                "Tìm video…", Modifier.width(260.dp),
+                focusRequester = if (channels.isEmpty()) refreshFocus else null, onClick = onSearch
+            )
             if (channels.isNotEmpty()) {
+                Spacer(Modifier.width(12.dp))
                 TvButton("Làm mới", LucIcons.Refresh, focusRequester = refreshFocus) { vm.refreshAll() }
             }
         }

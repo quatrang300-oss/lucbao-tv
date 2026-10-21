@@ -4,12 +4,15 @@ import android.view.ViewGroup
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -60,6 +63,10 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.layout.fillMaxWidth
+import vn.lucbao.tv.shorts.ShortsTopic
+import androidx.compose.ui.window.Dialog
 import vn.lucbao.tv.data.Format
 import vn.lucbao.tv.data.Library
 import vn.lucbao.tv.data.Video
@@ -101,6 +108,7 @@ fun TvShorts(active: Boolean, onOpenVideo: (Video) -> Unit) {
     val buttonsFocus = remember { FocusRequester() }
     val topicFocus = remember { FocusRequester() }
     val retryFocus = remember { FocusRequester() }
+    var searching by remember { mutableStateOf(false) }
 
     // New feed (topic, refresh, new visit): back to the first short.
     LaunchedEffect(items.isEmpty()) { if (items.isEmpty()) index = 0 }
@@ -145,7 +153,25 @@ fun TvShorts(active: Boolean, onOpenVideo: (Video) -> Unit) {
         }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    if (searching) {
+        ShortsSearchDialog(
+            initial = if (topic.id.startsWith(SEARCH_TOPIC)) topic.label else "",
+            onSearch = { q ->
+                searching = false
+                val text = q.trim()
+                if (text.isNotEmpty()) {
+                    vm.selectTopic(ShortsTopic(SEARCH_TOPIC + text, text, listOf("$text #shorts", "$text shorts", text)))
+                    runCatching { videoFocus.requestFocus() }
+                }
+            },
+            onDismiss = { searching = false },
+        )
+    }
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+        // Three zones that never overlap: topics left, the 9:16 short in the middle, info right.
+        val videoW = minOf(maxHeight * 9f / 16f, maxWidth * 0.5f)
+        val sideW = (maxWidth - videoW) / 2
+        val fullH = maxHeight
         // Blurred picture of the short behind everything.
         AsyncImage(
             model = cur?.thumbnail, contentDescription = null, contentScale = ContentScale.Crop,
@@ -158,7 +184,7 @@ fun TvShorts(active: Boolean, onOpenVideo: (Video) -> Unit) {
             Modifier
                 .align(Alignment.Center)
                 .fillMaxHeight()
-                .aspectRatio(9f / 16f)
+                .width(videoW)
                 .background(Color.Black)
                 .focusRequester(videoFocus)
                 .onKeyEvent { e ->
@@ -241,26 +267,42 @@ fun TvShorts(active: Boolean, onOpenVideo: (Video) -> Unit) {
         }
 
         // Topics, top left. Picking the current topic again loads new shorts.
-        LazyRow(
+        Column(
             Modifier
                 .align(Alignment.TopStart)
-                .padding(start = 24.dp, top = 22.dp)
-                // The short fills the whole height, so ▼ would skip it: go straight back to it.
-                .onPreviewKeyEvent { e ->
-                    if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown && items.isNotEmpty()) {
-                        runCatching { videoFocus.requestFocus() }
-                        true
-                    } else false
-                },
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .width(sideW)
+                .padding(start = 24.dp, top = 22.dp, end = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(SHORTS_TOPICS, key = { it.id }) { t ->
-                TvButton(
-                    t.label, null, selected = t.id == topic.id,
-                    focusRequester = if (t.id == topic.id) topicFocus else null
-                ) {
-                    vm.selectTopic(t)
-                    runCatching { videoFocus.requestFocus() }
+            // Search shorts: the result becomes a topic of its own, first in the row.
+            vn.lucbao.tv.ui.TvSearchBar(
+                if (topic.id.startsWith(SEARCH_TOPIC)) topic.label else "Tìm Shorts…",
+                Modifier.fillMaxWidth(),
+                typed = topic.id.startsWith(SEARCH_TOPIC),
+            ) {
+                ShortsPlayer.pause()
+                searching = true
+            }
+            LazyRow(
+                Modifier
+                    // The short fills the whole height, so ▼ would skip it: go straight back to it.
+                    .onPreviewKeyEvent { e ->
+                        if (e.type == KeyEventType.KeyDown && e.key == Key.DirectionDown && items.isNotEmpty()) {
+                            runCatching { videoFocus.requestFocus() }
+                            true
+                        } else false
+                    },
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val topics = if (topic.id.startsWith(SEARCH_TOPIC)) listOf(topic) + SHORTS_TOPICS else SHORTS_TOPICS
+                items(topics, key = { it.id }) { t ->
+                    TvButton(
+                        t.label, if (t.id.startsWith(SEARCH_TOPIC)) LucIcons.Search else null, selected = t.id == topic.id,
+                        focusRequester = if (t.id == topic.id) topicFocus else null
+                    ) {
+                        vm.selectTopic(t)
+                        runCatching { videoFocus.requestFocus() }
+                    }
                 }
             }
         }
@@ -272,8 +314,11 @@ fun TvShorts(active: Boolean, onOpenVideo: (Video) -> Unit) {
             Column(
                 Modifier
                     .align(Alignment.BottomEnd)
-                    .width(300.dp)
-                    .padding(end = 28.dp, bottom = 40.dp),
+                    .width(sideW)
+                    .heightIn(max = fullH)
+                    // Small screens: scrolls (the remote's focus scrolls it) instead of running over the topics.
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 20.dp, end = 28.dp, top = 24.dp, bottom = 40.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
@@ -314,6 +359,30 @@ fun TvShorts(active: Boolean, onOpenVideo: (Video) -> Unit) {
                     TvButton("Thử lại", LucIcons.Refresh, focusRequester = retryFocus) { vm.refresh() }
                 }
             }
+        }
+    }
+}
+
+private const val SEARCH_TOPIC = "search:"
+
+/** Typing a Shorts search with the Vietnamese keyboard. */
+@Composable
+private fun ShortsSearchDialog(initial: String, onSearch: (String) -> Unit, onDismiss: () -> Unit) {
+    val c = Luc.colors
+    var q by remember { mutableStateOf(initial) }
+    val first = remember { FocusRequester() }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.clip(RoundedCornerShape(18.dp)).background(c.surface).padding(22.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text("Tìm Shorts", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            TvQueryField(q, "Gõ điều bạn muốn xem")
+            TvKeyboard(q, onQueryChange = { q = it }, onSearch = { onSearch(q) }, firstKey = first)
+        }
+        LaunchedEffect(Unit) {
+            delay(100)
+            runCatching { first.requestFocus() }
         }
     }
 }
