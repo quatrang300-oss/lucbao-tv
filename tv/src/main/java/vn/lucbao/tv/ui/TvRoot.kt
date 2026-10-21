@@ -80,6 +80,8 @@ fun TvRoot(vm: AppViewModel, voiceSignal: Int) {
         val c = Luc.colors
         val ui by PlayerController.ui.collectAsStateWithLifecycle()
         var screen by rememberSaveable { mutableStateOf(TvScreen.HOME) }
+        // Tìm kiếm is no longer in the left column: the search bars open it, Back returns here.
+        var searchFrom by rememberSaveable { mutableStateOf(TvScreen.HOME) }
         var playerOpen by remember { mutableStateOf(false) }
         var voicePending by remember { mutableStateOf(false) }
         SideEffect { TvState.playerOpen = playerOpen && ui.video != null }
@@ -112,7 +114,7 @@ fun TvRoot(vm: AppViewModel, voiceSignal: Int) {
         val shown = buildSet {
             add(TvScreen.HOME)
             add(TvScreen.SETTINGS)
-            if (settings.tabSearch) add(TvScreen.SEARCH)
+            add(TvScreen.SEARCH)
             if (settings.tabShorts) add(TvScreen.SHORTS)
             if (settings.tabMusic) add(TvScreen.MUSIC)
             if (settings.tabFollowing) add(TvScreen.FOLLOWING)
@@ -122,18 +124,25 @@ fun TvRoot(vm: AppViewModel, voiceSignal: Int) {
         // Leaving or entering kids mode closes the player.
         LaunchedEffect(kidsOn) { playerOpen = false }
         LaunchedEffect(voiceSignal) {
-            if (voiceSignal > 0 && !kidsOn && settings.tabSearch) {
+            if (voiceSignal > 0 && !kidsOn) {
                 if (playerOpen) {
                     playerOpen = false
                     PlayerController.stop()
                 }
+                if (screen != TvScreen.SEARCH) searchFrom = screen
                 screen = TvScreen.SEARCH
                 voicePending = true
             }
         }
 
         // Registered before the screens so their own Back (album page, search…) comes first.
-        BackHandler(enabled = !(playerOpen && ui.video != null) && screen != TvScreen.HOME && !kidsOn) { screen = TvScreen.HOME }
+        BackHandler(enabled = !(playerOpen && ui.video != null) && screen != TvScreen.HOME && !kidsOn) {
+            screen = if (screen == TvScreen.SEARCH && searchFrom in shown) searchFrom else TvScreen.HOME
+        }
+        val openSearch: () -> Unit = {
+            if (screen != TvScreen.SEARCH) searchFrom = screen
+            screen = TvScreen.SEARCH
+        }
         Box(Modifier.fillMaxSize().background(c.surface)) {
             if (kidsOn) {
                 // Chế độ Trẻ em replaces everything until a parent leaves it with the PIN.
@@ -141,15 +150,15 @@ fun TvRoot(vm: AppViewModel, voiceSignal: Int) {
                     TvKids(playerOpen = playerOpen && ui.video != null, onPlay = play)
                 }
             } else Row(Modifier.fillMaxSize()) {
-                Rail(screen, shown) { screen = it }
+                Rail(if (screen == TvScreen.SEARCH) searchFrom else screen, shown) { screen = it }
                 Box(Modifier.weight(1f).fillMaxHeight().focusRequester(contentFocus).focusGroup()) {
                     when (screen) {
-                        TvScreen.HOME -> TvHome(vm, onPlay = play)
+                        TvScreen.HOME -> TvHome(vm, onPlay = play, onSearch = openSearch)
                         TvScreen.SEARCH -> TvSearch(vm, voicePending, onVoiceHandled = { voicePending = false }, onPlay = play)
                         TvScreen.SHORTS -> TvShorts(active = !(playerOpen && ui.video != null), onOpenVideo = play)
                         TvScreen.MUSIC -> TvMusic(onOpenPlayer = { playerOpen = true })
-                        TvScreen.FOLLOWING -> TvFollowing(vm, onPlay = play)
-                        TvScreen.LIBRARY -> TvLibrary(onPlay = play)
+                        TvScreen.FOLLOWING -> TvFollowing(vm, onPlay = play, onSearch = openSearch)
+                        TvScreen.LIBRARY -> TvLibrary(onPlay = play, onSearch = openSearch)
                         TvScreen.SETTINGS -> TvSettings()
                     }
                 }
@@ -174,7 +183,6 @@ fun TvRoot(vm: AppViewModel, voiceSignal: Int) {
 @Composable
 private fun Rail(current: TvScreen, shown: Set<TvScreen>, onSelect: (TvScreen) -> Unit) {
     val items = listOf(
-        TvScreen.SEARCH to LucIcons.Search,
         TvScreen.HOME to LucIcons.Home,
         TvScreen.SHORTS to LucIcons.Shorts,
         TvScreen.MUSIC to LucIcons.Music,
@@ -186,10 +194,10 @@ private fun Rail(current: TvScreen, shown: Set<TvScreen>, onSelect: (TvScreen) -
         Modifier
             .width(68.dp)
             .fillMaxHeight()
-            .background(Brush.horizontalGradient(listOf(Color(0xF2040F0B), Color(0x00040F0B))))
-            .padding(top = 96.dp),
+            .background(Brush.horizontalGradient(listOf(Color(0xF2040F0B), Color(0x00040F0B)))),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        // Spread evenly around the middle of the left edge, so short screens show every item.
+        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)
     ) {
         items.forEach { (screen, icon) -> RailItem(icon, screen == current) { onSelect(screen) } }
     }
