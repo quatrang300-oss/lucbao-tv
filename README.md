@@ -1,6 +1,6 @@
 # Lục Bảo TV
 
-Ứng dụng xem YouTube **không có quảng cáo** dành riêng cho **Android TV / Google TV**, điều khiển hoàn toàn bằng remote. Đây là ứng dụng độc lập (tên gói `vn.lucbao.tv`), không liên quan tới bản Lục Bảo trên điện thoại.
+Ứng dụng xem YouTube **không có quảng cáo** dành riêng cho **Android TV / Google TV** (Android 7.0 trở lên), điều khiển hoàn toàn bằng remote. Đây là ứng dụng độc lập (tên gói `vn.lucbao.tv`), không liên quan tới bản Lục Bảo trên điện thoại.
 
 ## Tính năng
 
@@ -50,7 +50,7 @@ Phía GitHub (không ai phải làm gì):
 
 ## Cài lên TV (chỉ một lần)
 
-1. **Bật cài từ nguồn không xác định:** vào *Cài đặt → Bảo mật / Quyền riêng tư → Nguồn không xác định* (hoặc *Ứng dụng → Truy cập ứng dụng đặc biệt → Cài ứng dụng không rõ nguồn*). Bật cho ứng dụng bạn dùng để mở file APK.
+1. **Bật cài từ nguồn không xác định:** vào *Cài đặt → Bảo mật / Quyền riêng tư → Nguồn không xác định* (hoặc *Ứng dụng → Truy cập ứng dụng đặc biệt → Cài ứng dụng không rõ nguồn*). Bật cho ứng dụng bạn dùng để mở file APK. Trên Android 7 chỉ có một công tắc chung *Nguồn không xác định* trong *Bảo mật & hạn chế*.
 2. Chọn **một** trong các cách sau:
    - **Downloader** (dễ nhất): cài *Downloader* (của AFTVnews) từ CH Play trên TV, gõ link tải ở trên rồi bấm Cài đặt.
    - **USB:** chép `LucBaoTV.apk` vào USB, cắm vào TV rồi mở file bằng trình quản lý tệp.
