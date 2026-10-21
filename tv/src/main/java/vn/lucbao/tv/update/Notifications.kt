@@ -20,6 +20,7 @@ object Notifications {
     private const val ID_WORK = 4202
 
     fun createChannels(context: Context) {
+        if (Build.VERSION.SDK_INT < 26) return // Android 7: no notification channels
         val nm = context.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL, "Cập nhật", NotificationManager.IMPORTANCE_DEFAULT).apply {
@@ -30,6 +31,7 @@ object Notifications {
     }
 
     fun createDownloadChannel(nm: NotificationManager) {
+        if (Build.VERSION.SDK_INT < 26) return
         nm.createNotificationChannel(
             NotificationChannel("downloads", "Tải về", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Tiến độ tải video và nhạc"

@@ -111,6 +111,8 @@ object Updater {
         val version = info.getInt("version")
         val api = info.optInt("api", 1)
         if (api != Engine.API_VERSION) return
+        // Engines built for Android 8+ only (all before minSdk 24) must not reach Android 7 TVs.
+        if (info.optInt("minSdk", 26) > Build.VERSION.SDK_INT) return
         if (version <= EngineManager.bestAvailableVersion()) return
 
         _status.value = "Đang tải bộ phát YouTube mới…"
@@ -171,7 +173,17 @@ object Updater {
         val foreground = androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.currentState
             .isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
         if (!foreground || PlayerController.isPlayingNow) return
-        runCatching { AppInstaller.install(context, apk) }
+        if (Build.VERSION.SDK_INT < 31) {
+            // Android 11 and older always ask: once per version every 12 h, so "Hủy" doesn't come back
+            // on every return to the app.
+            val p = prefs(context)
+            val now = System.currentTimeMillis()
+            if (p.getLong("askedCode", 0) == code && now - p.getLong("askedAt", 0) < 12 * 3_600_000L) return
+            p.edit().putLong("askedCode", code).putLong("askedAt", now).apply()
+        }
+        val app = context.applicationContext
+        // Copying the APK into the installer takes a while on old TVs: not on the main thread.
+        Thread { runCatching { AppInstaller.install(app, apk) } }.start()
     }
 
     @Suppress("DEPRECATION")
