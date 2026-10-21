@@ -18,7 +18,8 @@ android {
 
     defaultConfig {
         applicationId = "vn.lucbao.engine"
-        minSdk = 26
+        // Android 7.0 TVs (e.g. Sony Bravia 2016) too.
+        minSdk = 24
         targetSdk = 35
         versionCode = engineVersion
         versionName = extractorVersion
@@ -42,6 +43,9 @@ android {
                 storePassword = System.getenv("SIGNING_PASSWORD")
                 keyAlias = System.getenv("SIGNING_ALIAS") ?: "lucbao"
                 keyPassword = System.getenv("SIGNING_PASSWORD")
+                // v1 too: the APK still installs when a file-transfer app drops the v2 block.
+                enableV1Signing = true
+                enableV2Signing = true
             }
         }
     }
