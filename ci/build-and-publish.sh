@@ -39,7 +39,7 @@ fi
 mkdir -p out
 cp engine/build/outputs/apk/release/engine-release.apk out/engine.apk
 cat > out/engine.json <<JSON
-{"version":$ENGINE_VERSION,"api":1,"extractor":"$EXTRACTOR","file":"engine.apk","sha256":"$(sha256sum out/engine.apk | cut -d' ' -f1)"}
+{"version":$ENGINE_VERSION,"api":1,"minSdk":24,"extractor":"$EXTRACTOR","file":"engine.apk","sha256":"$(sha256sum out/engine.apk | cut -d' ' -f1)"}
 JSON
 
 ensure_release() {
