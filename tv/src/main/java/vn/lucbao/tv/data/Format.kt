@@ -39,10 +39,29 @@ object Format {
     /** Parses an ISO-8601 instant ("2026-10-03T12:00:00Z"); 0 when it is not one. */
     fun parseInstant(s: String?): Long {
         if (s.isNullOrBlank() || s.length < 10 || !s[0].isDigit() || s[4] != '-') return 0
-        return runCatching { java.time.Instant.parse(s).toEpochMilli() }
-            .recoverCatching { java.time.OffsetDateTime.parse(s).toInstant().toEpochMilli() }
-            .getOrDefault(0L)
+        // Without java.time (Android 7 has none): "2026-10-03T12:00:00[.123](Z|+07:00)".
+        val m = ISO.matchEntire(s.trim()) ?: return 0
+        return runCatching {
+            val g = m.groupValues
+            val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+            cal.clear()
+            cal.set(g[1].toInt(), g[2].toInt() - 1, g[3].toInt(), g[4].toInt(), g[5].toInt(), g[6].toInt())
+            val millis = g[7].takeIf { it.isNotEmpty() }?.padEnd(3, '0')?.take(3)?.toLong() ?: 0L
+            val offset = when (val z = g[8]) {
+                "", "Z", "z" -> 0L
+                else -> {
+                    val sign = if (z[0] == '-') -1 else 1
+                    val hm = z.substring(1).replace(":", "")
+                    sign * (hm.take(2).toLong() * 60 + hm.drop(2).ifEmpty { "0" }.toLong()) * 60_000L
+                }
+            }
+            cal.timeInMillis + millis - offset
+        }.getOrDefault(0L)
     }
+
+    private val ISO = Regex(
+        "(\\d{4})-(\\d{2})-(\\d{2})[T ](\\d{2}):(\\d{2}):(\\d{2})(?:[.,](\\d+))?(Z|z|[+-]\\d{2}:?\\d{2})?"
+    )
 
     /** "5 phút trước", "3 ngày trước"… */
     fun ago(millis: Long): String {
