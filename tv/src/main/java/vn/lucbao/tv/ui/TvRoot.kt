@@ -51,6 +51,7 @@ import vn.lucbao.tv.ui.screens.TvShorts
 import vn.lucbao.tv.ui.screens.TvOnboarding
 import vn.lucbao.tv.ui.screens.TvPlayer
 import vn.lucbao.tv.ui.screens.TvSearch
+import vn.lucbao.tv.ui.screens.TvMainSearchPanel
 import vn.lucbao.tv.ui.screens.TvSettings
 import vn.lucbao.tv.ui.theme.Luc
 import vn.lucbao.tv.ui.theme.LucIcons
@@ -139,9 +140,16 @@ fun TvRoot(vm: AppViewModel, voiceSignal: Int) {
         BackHandler(enabled = !(playerOpen && ui.video != null) && screen != TvScreen.HOME && !kidsOn) {
             screen = if (screen == TvScreen.SEARCH && searchFrom in shown) searchFrom else TvScreen.HOME
         }
-        val openSearch: () -> Unit = {
+        // Search bars open only the keyboard, docked at the bottom over the current screen.
+        var searchPanel by remember { mutableStateOf(false) }
+        val openSearch: () -> Unit = { searchPanel = true }
+        val showResults: () -> Unit = {
             if (screen != TvScreen.SEARCH) searchFrom = screen
             screen = TvScreen.SEARCH
+        }
+        LaunchedEffect(kidsOn, playerOpen) { if (kidsOn || playerOpen) searchPanel = false }
+        if (searchPanel && !kidsOn) {
+            TvMainSearchPanel(vm, onPlay = play, onResults = showResults, onDismiss = { searchPanel = false })
         }
         Box(Modifier.fillMaxSize().background(c.surface)) {
             if (kidsOn) {
@@ -154,7 +162,10 @@ fun TvRoot(vm: AppViewModel, voiceSignal: Int) {
                 Box(Modifier.weight(1f).fillMaxHeight().focusRequester(contentFocus).focusGroup()) {
                     when (screen) {
                         TvScreen.HOME -> TvHome(vm, onPlay = play, onSearch = openSearch)
-                        TvScreen.SEARCH -> TvSearch(vm, voicePending, onVoiceHandled = { voicePending = false }, onPlay = play)
+                        TvScreen.SEARCH -> TvSearch(
+                            vm, voicePending, onVoiceHandled = { voicePending = false }, onPlay = play,
+                            onOpenKeyboard = openSearch,
+                        )
                         TvScreen.SHORTS -> TvShorts(active = !(playerOpen && ui.video != null), onOpenVideo = play)
                         TvScreen.MUSIC -> TvMusic(onOpenPlayer = { playerOpen = true })
                         TvScreen.FOLLOWING -> TvFollowing(vm, onPlay = play, onSearch = openSearch)
