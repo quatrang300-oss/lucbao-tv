@@ -1,5 +1,6 @@
 package vn.lucbao.tv.ui.screens
 
+import androidx.compose.runtime.mutableStateOf
 import android.os.Build
 import android.content.Context
 import android.content.Intent
@@ -89,6 +90,8 @@ fun TvSettings() {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refresh++ }
     val installOk = remember(refresh) { canAutoUpdate(context) }
     val firstFocus = remember { FocusRequester() }
+    var restoreOpen by remember { mutableStateOf(false) }
+    if (restoreOpen) TvRestoreDialog(onDismiss = { restoreOpen = false })
 
     LaunchedEffect(Unit) {
         delay(100)
@@ -142,6 +145,28 @@ fun TvSettings() {
             ).forEach { (label, on, set) ->
                 TvButton(label, if (on) LucIcons.Check else null, selected = on) { set(!on) }
             }
+        }
+
+        Section(
+            "Tự bỏ qua trong video",
+            "Bỏ qua những đoạn người làm video tự chèn vào, theo đánh dấu của cộng đồng SponsorBlock. Vừa bỏ qua thì bấm ▲ để xem lại."
+        ) {
+            listOf(
+                Triple("Tài trợ", s.sbSponsor) { v: Boolean -> Prefs.update { it.copy(sbSponsor = v) } },
+                Triple("Tự quảng cáo", s.sbSelfPromo) { v: Boolean -> Prefs.update { it.copy(sbSelfPromo = v) } },
+                Triple("Nhắc like/đăng ký", s.sbInteraction) { v: Boolean -> Prefs.update { it.copy(sbInteraction = v) } },
+                Triple("Mở đầu/kết thúc", s.sbIntroOutro) { v: Boolean -> Prefs.update { it.copy(sbIntroOutro = v) } },
+                Triple("Ngoài nhạc", s.sbMusicOfftopic) { v: Boolean -> Prefs.update { it.copy(sbMusicOfftopic = v) } },
+            ).forEach { (label, on, set) ->
+                TvButton(label, if (on) LucIcons.Check else null, selected = on) { set(!on) }
+            }
+        }
+
+        Section(
+            "Khôi phục dữ liệu từ điện thoại",
+            "Chuyển kênh theo dõi, yêu thích, xem sau và lịch sử từ Lục Bảo trên điện thoại sang TV bằng tệp sao lưu."
+        ) {
+            TvButton("Tìm tệp sao lưu", LucIcons.Download) { restoreOpen = true }
         }
 
         Section("Tự phát video tiếp theo") {

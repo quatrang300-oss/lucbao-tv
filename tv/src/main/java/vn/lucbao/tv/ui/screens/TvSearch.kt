@@ -1,5 +1,10 @@
 package vn.lucbao.tv.ui.screens
 
+import android.view.Gravity
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.window.DialogProperties
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -67,7 +72,7 @@ import vn.lucbao.tv.ui.tvErrorText
 
 private const val KEY = 38
 private const val GAP = 6
-private const val COLS = 10
+private const val COLS = 11
 private val FIELD_W = (KEY * COLS + GAP * (COLS - 1)).dp
 
 private sealed interface KeyAction {
@@ -83,21 +88,22 @@ private data class KeyDef(val label: String, val span: Int, val action: KeyActio
 
 private fun letters(s: String) = s.split(' ').map { KeyDef(it, 1, KeyAction.Type(it)) }
 
-/** Numbers on top, plain a–z; letters with accents open a small panel (the plain letter first). */
+/** QWERTY, numbers on top; letters with accents open a small panel (the plain letter first). */
 private val KEYBOARD: List<List<KeyDef>> = listOf(
     letters("1 2 3 4 5 6 7 8 9 0"),
-    letters("a b c d e f g h i j"),
-    letters("k l m n o p q r s t"),
-    letters("u v w x y z") + listOf(
-        KeyDef("Hoa", 2, KeyAction.Shift, LucIcons.Shift),
-        KeyDef("xoá", 2, KeyAction.Backspace, LucIcons.Backspace),
-    ),
+    letters("q w e r t y u i o p"),
+    letters("a s d f g h j k l"),
+    listOf(KeyDef("Hoa", 2, KeyAction.Shift, LucIcons.Shift)) + letters("z x c v b n m") +
+        listOf(KeyDef("xoá", 2, KeyAction.Backspace, LucIcons.Backspace)),
     listOf(
-        KeyDef("khoảng trắng", 4, KeyAction.Space),
+        KeyDef("khoảng trắng", 5, KeyAction.Space),
         KeyDef("xoá hết", 3, KeyAction.Clear),
         KeyDef("TÌM", 3, KeyAction.Search, LucIcons.Search),
     ),
 )
+
+/** Row indents, like a real keyboard (a s d… sits half a key to the right). */
+private val ROW_INDENT = listOf(0f, 0f, 0.5f, 0f, 0f)
 
 /** OK on one of these letters opens the panel: one row per base vowel, then its 5 tones. */
 private val ACCENTS: Map<String, List<String>> = mapOf(
@@ -113,47 +119,19 @@ private val ACCENTS: Map<String, List<String>> = mapOf(
 // ------------------------------------------------------------------ screen
 
 @Composable
-fun TvSearch(vm: AppViewModel, voicePending: Boolean, onVoiceHandled: () -> Unit, onPlay: (Video) -> Unit) {
+fun TvSearch(
+    vm: AppViewModel,
+    voicePending: Boolean,
+    onVoiceHandled: () -> Unit,
+    onPlay: (Video) -> Unit,
+    onOpenKeyboard: () -> Unit,
+) {
     val c = Luc.colors
-    val ctx = LocalContext.current
-    val query by vm.query.collectAsStateWithLifecycle()
-    val suggestions by vm.suggestions.collectAsStateWithLifecycle()
-    val recent by vm.recent.collectAsStateWithLifecycle()
     val results by vm.results.collectAsStateWithLifecycle()
     val submitted by vm.submitted.collectAsStateWithLifecycle()
-
-    val firstKey = remember { FocusRequester() }
+    val barFocus = remember { FocusRequester() }
     val resultsFocus = remember { FocusRequester() }
-    var focusResults by remember { mutableStateOf(false) }
-
-    fun search(text: String) {
-        val direct = vm.submit(text)
-        if (direct != null) onPlay(direct) else focusResults = true
-    }
-
-    val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        if (r.resultCode == Activity.RESULT_OK) {
-            val said = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-            if (!said.isNullOrBlank()) {
-                vm.onQueryChange(said)
-                search(said)
-            }
-        }
-    }
-
-    fun listen() {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "vi-VN")
-            .putExtra(RecognizerIntent.EXTRA_PROMPT, "Nói điều bạn muốn xem")
-        try {
-            voice.launch(intent)
-        } catch (_: ActivityNotFoundException) {
-            Toast.makeText(ctx, "TV này chưa hỗ trợ tìm bằng giọng nói. Dùng bàn phím bên dưới nhé.", Toast.LENGTH_LONG).show()
-        } catch (_: SecurityException) {
-            Toast.makeText(ctx, "TV này chưa hỗ trợ tìm bằng giọng nói. Dùng bàn phím bên dưới nhé.", Toast.LENGTH_LONG).show()
-        }
-    }
+    val listen = rememberVoiceSearch(vm, onPlay)
 
     LaunchedEffect(voicePending) {
         if (voicePending) {
@@ -164,19 +142,13 @@ fun TvSearch(vm: AppViewModel, voicePending: Boolean, onVoiceHandled: () -> Unit
     }
     LaunchedEffect(Unit) {
         delay(100)
-        firstKey.focusIfVisible()
+        barFocus.focusIfVisible()
     }
-    LaunchedEffect(focusResults, results.items.isNotEmpty(), results.loaded, results.loading) {
-        if (!focusResults) return@LaunchedEffect
+    // New results: the remote goes to them.
+    LaunchedEffect(submitted, results.items.isNotEmpty()) {
         if (results.items.isNotEmpty()) {
             delay(120)
             resultsFocus.focusIfVisible()
-            focusResults = false
-        } else if (results.loaded && !results.loading) {
-            // Nothing found (or an error): put the remote back on the keyboard.
-            delay(80)
-            firstKey.focusIfVisible()
-            focusResults = false
         }
     }
 
@@ -186,68 +158,22 @@ fun TvSearch(vm: AppViewModel, voicePending: Boolean, onVoiceHandled: () -> Unit
             .verticalScroll(rememberScrollState())
             .padding(top = 28.dp, bottom = 32.dp)
     ) {
-        // Field + mic
-        Row(
-            Modifier.padding(start = 24.dp, end = TvEdge),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                Modifier
-                    .width(FIELD_W)
-                    .height(50.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(c.card)
-                    .border(2.dp, c.primary, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(LucIcons.Search, null, tint = c.muted, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    query.ifEmpty { "Tìm kiếm hoặc nói vào micro" },
-                    color = if (query.isEmpty()) c.muted else c.text,
-                    fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                Box(Modifier.padding(start = 2.dp).width(2.dp).height(24.dp).background(c.primary))
-            }
-            Spacer(Modifier.width(20.dp))
-            MicButton { listen() }
+        Row(Modifier.padding(start = 24.dp, end = TvEdge), verticalAlignment = Alignment.CenterVertically) {
+            vn.lucbao.tv.ui.TvSearchBar(
+                submitted ?: "Tìm video trên YouTube…", Modifier.width(520.dp),
+                typed = submitted != null, focusRequester = barFocus, onClick = onOpenKeyboard
+            )
             Spacer(Modifier.width(16.dp))
-            Text(
-                "Chọn nút micro (hoặc bấm nút\ntìm kiếm trên điều khiển) rồi nói",
-                color = c.muted, fontSize = 14.sp, lineHeight = 20.sp
-            )
-        }
-
-        Row(Modifier.padding(start = 24.dp, end = TvEdge, top = 16.dp)) {
-            // Keyboard
-            TvKeyboard(
-                query = query,
-                onQueryChange = { vm.onQueryChange(it) },
-                onSearch = { search(query) },
-                firstKey = firstKey,
-                onClear = { vm.clearSearch() },
-            )
-            Spacer(Modifier.width(28.dp))
-            // Suggestions / recent searches
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                val showRecent = query.isBlank()
-                val list = if (showRecent) recent.take(6) else suggestions.take(6)
-                if (showRecent && list.isNotEmpty()) {
-                    Text("Tìm gần đây", color = c.muted, fontSize = 13.sp, modifier = Modifier.padding(start = 14.dp, bottom = 4.dp))
-                }
-                list.forEach { s ->
-                    SuggestionRow(s, query, if (showRecent) LucIcons.History else LucIcons.Search) {
-                        vm.onQueryChange(s)
-                        search(s)
-                    }
-                }
-            }
+            MicButton { listen() }
         }
 
         val q = submitted
-        if (q != null) {
+        if (q == null) {
+            Text(
+                "Chọn ô tìm kiếm để gõ, hoặc nút micro để nói.", color = c.muted, fontSize = 15.sp,
+                modifier = Modifier.padding(start = 24.dp, top = 20.dp)
+            )
+        } else {
             Spacer(Modifier.height(10.dp))
             if (results.error != null && results.items.isEmpty()) {
                 Text(
@@ -266,6 +192,140 @@ fun TvSearch(vm: AppViewModel, voicePending: Boolean, onVoiceHandled: () -> Unit
                     onNearEnd = { vm.loadMoreResults() },
                     firstFocus = resultsFocus,
                 )
+            }
+        }
+    }
+}
+
+/** Starts voice search (Vietnamese); what is said is searched at once. */
+@Composable
+private fun rememberVoiceSearch(vm: AppViewModel, onPlay: (Video) -> Unit, onSearched: () -> Unit = {}): () -> Unit {
+    val ctx = LocalContext.current
+    val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        if (r.resultCode == Activity.RESULT_OK) {
+            val said = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!said.isNullOrBlank()) {
+                vm.onQueryChange(said)
+                val direct = vm.submit(said)
+                if (direct != null) onPlay(direct) else onSearched()
+            }
+        }
+    }
+    return {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "vi-VN")
+            .putExtra(RecognizerIntent.EXTRA_PROMPT, "Nói điều bạn muốn xem")
+        try {
+            voice.launch(intent)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(ctx, "TV này chưa hỗ trợ tìm bằng giọng nói. Dùng bàn phím nhé.", Toast.LENGTH_LONG).show()
+        } catch (_: SecurityException) {
+            Toast.makeText(ctx, "TV này chưa hỗ trợ tìm bằng giọng nói. Dùng bàn phím nhé.", Toast.LENGTH_LONG).show()
+        }
+    }
+}
+
+/**
+ * The main search keyboard: opens at the bottom over the screen the user is on (the screen stays
+ * visible above). TÌM or a suggestion shows the results; Back closes it.
+ */
+@Composable
+fun TvMainSearchPanel(
+    vm: AppViewModel,
+    onPlay: (Video) -> Unit,
+    onResults: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val query by vm.query.collectAsStateWithLifecycle()
+    val suggestions by vm.suggestions.collectAsStateWithLifecycle()
+    val recent by vm.recent.collectAsStateWithLifecycle()
+    fun search(text: String) {
+        if (text.isBlank()) return
+        onDismiss()
+        val direct = vm.submit(text)
+        if (direct != null) onPlay(direct) else onResults()
+    }
+    val listen = rememberVoiceSearch(vm, onPlay, onSearched = { onDismiss(); onResults() })
+    TvKeyboardPanel(
+        query = query,
+        onQueryChange = { vm.onQueryChange(it) },
+        hint = "Tìm video trên YouTube…",
+        onSearch = { search(it) },
+        onDismiss = onDismiss,
+        onClear = { vm.clearSearch() },
+        onVoice = listen,
+    ) {
+        val showRecent = query.isBlank()
+        val list = if (showRecent) recent.take(5) else suggestions.take(5)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (showRecent && list.isNotEmpty()) {
+                Text(
+                    "Tìm gần đây", color = Luc.colors.muted, fontSize = 13.sp,
+                    modifier = Modifier.padding(start = 14.dp, bottom = 4.dp)
+                )
+            }
+            list.forEach { sug ->
+                SuggestionRow(sug, query, if (showRecent) LucIcons.History else LucIcons.Search) {
+                    vm.onQueryChange(sug)
+                    search(sug)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * On-screen keyboard docked at the bottom of the TV: only the keyboard covers the screen, the rest
+ * stays visible. Used by every search (Trang chủ, Shorts, Nhạc…).
+ */
+@Composable
+fun TvKeyboardPanel(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    hint: String,
+    onSearch: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onClear: () -> Unit = { onQueryChange("") },
+    onVoice: (() -> Unit)? = null,
+    side: (@Composable () -> Unit)? = null,
+) {
+    val c = Luc.colors
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            window?.setGravity(Gravity.BOTTOM)
+            window?.setDimAmount(0.15f)
+        }
+        val firstKey = remember { FocusRequester() }
+        LaunchedEffect(Unit) {
+            delay(100)
+            runCatching { firstKey.requestFocus() }
+        }
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                .background(Color(0xF20A1E16))
+                .padding(start = 96.dp, end = TvEdge, top = 16.dp, bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TvQueryField(query, hint)
+                if (onVoice != null) {
+                    Spacer(Modifier.width(16.dp))
+                    MicButton { onVoice() }
+                }
+            }
+            Row {
+                TvKeyboard(
+                    query = query, onQueryChange = onQueryChange, onSearch = { onSearch(query) },
+                    firstKey = firstKey, onClear = onClear,
+                )
+                if (side != null) {
+                    Spacer(Modifier.width(28.dp))
+                    Box(Modifier.weight(1f)) { side() }
+                }
             }
         }
     }
@@ -412,12 +472,15 @@ fun TvKeyboard(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(GAP.dp)) {
-        KEYBOARD.forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(GAP.dp)) {
+        KEYBOARD.forEachIndexed { r, row ->
+            Row(
+                Modifier.padding(start = ((KEY + GAP) * ROW_INDENT[r]).dp),
+                horizontalArrangement = Arrangement.spacedBy(GAP.dp)
+            ) {
                 row.forEach { k ->
                     val letter = (k.action as? KeyAction.Type)?.ch
                     val requesters = buildList<FocusRequester> {
-                        if (letter == "a" && firstKey != null) add(firstKey)
+                        if (letter == "q" && firstKey != null) add(firstKey)
                         letter?.let { accentFocus[it] }?.let { add(it) }
                     }
                     TvKey(

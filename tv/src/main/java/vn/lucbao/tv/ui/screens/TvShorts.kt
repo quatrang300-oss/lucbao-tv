@@ -375,21 +375,13 @@ private const val SEARCH_TOPIC = "search:"
 /** Typing a Shorts search with the Vietnamese keyboard. */
 @Composable
 private fun ShortsSearchDialog(initial: String, onSearch: (String) -> Unit, onDismiss: () -> Unit) {
-    val c = Luc.colors
     var q by remember { mutableStateOf(initial) }
-    val first = remember { FocusRequester() }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier.clip(RoundedCornerShape(18.dp)).background(c.surface).padding(22.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Text("Tìm Shorts", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            TvQueryField(q, "Gõ điều bạn muốn xem")
-            TvKeyboard(q, onQueryChange = { q = it }, onSearch = { onSearch(q) }, firstKey = first)
-        }
-        LaunchedEffect(Unit) {
-            delay(100)
-            runCatching { first.requestFocus() }
-        }
-    }
+    // Only the keyboard, docked at the bottom: the screen stays visible above it.
+    TvKeyboardPanel(
+        query = q,
+        onQueryChange = { q = it },
+        hint = "Gõ điều bạn muốn xem",
+        onSearch = { onSearch(it) },
+        onDismiss = onDismiss,
+    )
 }

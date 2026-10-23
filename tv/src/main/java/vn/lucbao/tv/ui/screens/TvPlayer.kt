@@ -1,5 +1,12 @@
 package vn.lucbao.tv.ui.screens
 
+import vn.lucbao.tv.player.SponsorSkip
+import androidx.compose.runtime.mutableFloatStateOf
+import kotlin.math.roundToInt
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -159,6 +166,30 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var buffered by remember { mutableLongStateOf(0L) }
+    var sleepDialog by remember { mutableStateOf(false) }
+    // "Lấp đầy": the player is laid out bigger than the screen so the black bars go away.
+    var videoAspect by remember { mutableFloatStateOf(0f) }
+    var areaSize by remember { mutableStateOf(IntSize.Zero) }
+    var filled by remember { mutableStateOf(false) }
+    LaunchedEffect(ui.video?.url) { filled = false }
+    val fillScale = run {
+        val w = areaSize.width.toFloat()
+        val h = areaSize.height.toFloat()
+        if (videoAspect <= 0f || w <= 0f || h <= 0f) 1f
+        else {
+            val area = w / h
+            if (videoAspect > area) videoAspect / area else area / videoAspect
+        }
+    }
+    val canFill = fillScale > 1.02f && ui.quality?.audioOnly != true
+    val zoom = if (filled && canFill) fillScale else 1f
+    val skipNotice by SponsorSkip.notice.collectAsStateWithLifecycle()
+    LaunchedEffect(skipNotice) {
+        if (skipNotice != null) {
+            delay(6_000)
+            SponsorSkip.dismissNotice()
+        }
+    }
 
     val rootFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
@@ -210,6 +241,8 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
             position = exo.currentPosition
             duration = exo.duration.takeIf { it > 0 } ?: 0L
             buffered = exo.bufferedPosition
+            val vs = exo.videoSize
+            videoAspect = if (vs.width > 0 && vs.height > 0) vs.width * vs.pixelWidthHeightRatio / vs.height else 0f
             delay(500)
         }
     }
@@ -243,8 +276,8 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
     LaunchedEffect(ui.video?.url) { speedRuler = false }
 
     // Auto-hide while playing.
-    LaunchedEffect(overlay, lastInput, ui.isPlaying, qualityDialog, ccDialog, ui.error, inRelated, speedRuler) {
-        if (overlay && ui.isPlaying && !qualityDialog && !ccDialog && !speedRuler && ui.error == null) {
+    LaunchedEffect(overlay, lastInput, ui.isPlaying, qualityDialog, ccDialog, sleepDialog, ui.error, inRelated, speedRuler) {
+        if (overlay && ui.isPlaying && !qualityDialog && !ccDialog && !sleepDialog && !speedRuler && ui.error == null) {
             delay(if (inRelated) HIDE_RELATED_MS else HIDE_AFTER_MS)
             hide()
         }
@@ -267,6 +300,7 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
     BackHandler {
         when {
             speedRuler -> speedRuler = false
+            sleepDialog -> sleepDialog = false
             ccDialog -> ccDialog = false
             qualityDialog -> qualityDialog = false
             overlay && ui.error == null -> hide()
@@ -278,6 +312,7 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
         Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .onSizeChanged { areaSize = it }
             // Keep the remote inside the player: the screens underneath stay composed.
             .focusProperties { exit = { FocusRequester.Cancel } }
             .focusGroup()
@@ -313,7 +348,19 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
             },
             update = { it.keepScreenOn = ui.isPlaying || ui.loading },
             onRelease = { it.player = null },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize().layout { measurable, constraints ->
+                val w = constraints.maxWidth
+                val h = constraints.maxHeight
+                if (zoom <= 1.001f || w == Constraints.Infinity || h == Constraints.Infinity) {
+                    val p = measurable.measure(constraints)
+                    layout(p.width, p.height) { p.place(0, 0) }
+                } else {
+                    val zw = (w * zoom).roundToInt()
+                    val zh = (h * zoom).roundToInt()
+                    val p = measurable.measure(Constraints.fixed(zw, zh))
+                    layout(w, h) { p.place((w - zw) / 2, (h - zh) / 2) }
+                }
+            }
         )
 
         // Invisible focus holder that receives the remote while the overlay is hidden.
@@ -335,7 +382,11 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
                     when (e.key) {
                         Key.DirectionLeft -> { seekBy(false); true }
                         Key.DirectionRight -> { seekBy(true); true }
-                        Key.DirectionUp -> { show(); true }
+                        Key.DirectionUp -> {
+                            // Just skipped a sponsor part: ▲ plays it ("Xem lại").
+                            if (skipNotice != null) SponsorSkip.rewatch(exo) else show()
+                            true
+                        }
                         Key.DirectionDown -> { show(if (ui.related.isNotEmpty()) FocusGoal.RELATED else FocusGoal.PLAY); true }
                         else -> false
                     }
@@ -360,6 +411,25 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
         }
         if (showStats && ui.error == null && ui.quality?.audioOnly != true) {
             StatsOverlay(Modifier.align(Alignment.TopStart).padding(start = TvEdge, top = 110.dp))
+        }
+
+        skipNotice?.let { n ->
+            Row(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = TvEdge, bottom = if (overlay) 300.dp else 40.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.72f))
+                    .padding(horizontal = 18.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Đã bỏ qua ${n.label}", color = Color.White, fontSize = 16.sp)
+                if (!overlay) {
+                    Text(
+                        "   ▲ Xem lại", color = c.primary, fontSize = 16.sp, fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
 
         if (ui.loading) {
@@ -402,7 +472,11 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
                 speedRuler = speedRuler,
                 speedFocus = speedFocus,
                 rulerFocus = rulerFocus,
-                onSpeedHold = { speedRuler = true; touch() },
+                onSpeedOpen = { speedRuler = true; rulerTouch++; touch() },
+                canFill = canFill,
+                filled = filled && canFill,
+                onFill = { filled = !filled; touch() },
+                onSleep = { sleepDialog = true },
                 onRulerTouch = { rulerTouch++; touch() },
                 onRulerClose = { speedRuler = false },
                 onPlay = { v ->
@@ -428,6 +502,12 @@ fun TvPlayer(ui: PlayerUi, onClose: () -> Unit, onPlay: (Video) -> Unit) {
             show()
         })
     }
+    if (sleepDialog) {
+        SleepDialog(onDismiss = {
+            sleepDialog = false
+            show()
+        })
+    }
 }
 
 @Composable
@@ -449,7 +529,11 @@ private fun Overlay(
     speedRuler: Boolean,
     speedFocus: FocusRequester,
     rulerFocus: FocusRequester,
-    onSpeedHold: () -> Unit,
+    onSpeedOpen: () -> Unit,
+    canFill: Boolean,
+    filled: Boolean,
+    onFill: () -> Unit,
+    onSleep: () -> Unit,
     onRulerTouch: () -> Unit,
     onRulerClose: () -> Unit,
     onPlay: (Video) -> Unit,
@@ -563,15 +647,40 @@ private fun Overlay(
                     Spacer(Modifier.width(28.dp))
                     TvButton("Phụ đề / Thuyết minh", LucIcons.Subtitles, selected = settings.vietnamese > 0) { onCaptions() }
                     if (!live) {
-                        SpeedButton(
-                            text = speedButtonText(ui.speed),
-                            selected = ui.speed != 1f,
-                            focusRequester = speedFocus,
-                            onTap = { PlayerController.setSpeed(nextSpeed(PlayerController.ui.value.speed)) },
-                            onHold = onSpeedHold,
-                        )
+                        // OK: the speed slider (◀ ▶ to change, OK again for the next speed).
+                        TvButton(
+                            speedButtonText(ui.speed), null, selected = ui.speed != 1f,
+                            focusRequester = speedFocus
+                        ) { onSpeedOpen() }
                     }
-                    TvButton("Lặp lại", LucIcons.RepeatOne, selected = loop) { PlayerController.setLoopVideo(!loop) }
+                    val context = LocalContext.current
+                    TvButton("Lặp lại", LucIcons.RepeatOne, selected = loop) {
+                        val on = !loop
+                        PlayerController.setLoopVideo(on)
+                        android.widget.Toast.makeText(
+                            context, if (on) "Đã bật lặp lại video này" else "Đã tắt lặp lại",
+                            android.widget.Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    if (canFill) {
+                        TvButton(
+                            if (filled) "Vừa màn hình" else "Lấp đầy", LucIcons.AspectRatio, selected = filled
+                        ) { onFill() }
+                    }
+                    val sleepAt by PlayerController.sleepAt.collectAsStateWithLifecycle()
+                    TvButton(
+                        when {
+                            sleepAt == -1L -> "Tắt khi hết video"
+                            sleepAt > 0 -> "Hẹn giờ: bật"
+                            else -> "Hẹn giờ tắt"
+                        },
+                        LucIcons.Timer, selected = sleepAt != 0L
+                    ) { onSleep() }
+                    val watchLater by Library.watchLater.collectAsStateWithLifecycle()
+                    val later = watchLater.any { videoKey(it.video.url) == videoKey(v.url) }
+                    TvButton(if (later) "Đã lưu xem sau" else "Xem sau", LucIcons.Bookmark, selected = later) {
+                        Library.toggleWatchLater(ui.video ?: v)
+                    }
                     TvButton(ui.quality?.label ?: "Chất lượng", LucIcons.Tune) { onQuality() }
                     // Kids mode keeps the grown-ups' favourites and follows untouched.
                     if (!kids) TvButton(
@@ -654,7 +763,7 @@ private fun SeekRow(position: Long, buffered: Long, duration: Long, onSeek: (Boo
 @Composable
 private fun ProgressBar(position: Long, buffered: Long, duration: Long, focused: Boolean, modifier: Modifier = Modifier) {
     val c = Luc.colors
-    val h = if (focused) 8.dp else 4.dp
+    val h = if (focused) 4.dp else 2.dp
     val p = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
     val b = if (duration > 0) (buffered.toFloat() / duration).coerceIn(0f, 1f) else 0f
     Box(
@@ -722,73 +831,6 @@ private fun QualityDialog(ui: PlayerUi, onDismiss: () -> Unit) {
 }
 
 /**
- * "Tốc độ" button. OK pressed and let go: the next speed. OK held for 1.5 s: [onHold]
- * (the speed slider), and letting go then does nothing more.
- */
-@Composable
-private fun SpeedButton(
-    text: String,
-    selected: Boolean,
-    focusRequester: FocusRequester,
-    onTap: () -> Unit,
-    onHold: () -> Unit,
-) {
-    val c = Luc.colors
-    val scope = rememberCoroutineScope()
-    var focused by remember { mutableStateOf(false) }
-    var holdJob by remember { mutableStateOf<Job?>(null) }
-    var held by remember { mutableStateOf(false) }
-    Text(
-        text,
-        color = if (focused) c.onPrimary else if (selected) c.primary else Color.White,
-        fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
-        modifier = Modifier
-            .focusRequester(focusRequester)
-            .onFocusChanged {
-                focused = it.isFocused
-                // Back from the slider: its key-up went there, start clean.
-                if (it.isFocused) {
-                    holdJob?.cancel()
-                    holdJob = null
-                    held = false
-                }
-            }
-            .onKeyEvent { e ->
-                val center = e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter
-                if (!center) return@onKeyEvent false
-                when (e.type) {
-                    KeyEventType.KeyDown -> {
-                        if (holdJob == null && !held) {
-                            holdJob = scope.launch {
-                                delay(1_500)
-                                held = true
-                                onHold()
-                            }
-                        }
-                    }
-                    KeyEventType.KeyUp -> {
-                        holdJob?.cancel()
-                        holdJob = null
-                        if (!held) onTap()
-                        held = false
-                    }
-                }
-                true
-            }
-            .focusable()
-            .clip(RoundedCornerShape(10.dp))
-            .background(
-                when {
-                    focused -> c.primary
-                    selected -> c.primary.copy(alpha = 0.22f)
-                    else -> Color.White.copy(alpha = 0.10f)
-                }
-            )
-            .padding(horizontal = 16.dp, vertical = 9.dp)
-    )
-}
-
-/**
  * Speed slider: a straight ruler with a mark per speed (longer at 1x, 2x, 3x…), only the
  * current speed written. ◀ ▶ change the speed at once; OK closes it.
  */
@@ -816,7 +858,11 @@ private fun SpeedRuler(
                     // Remotes repeat OK while held: only a fresh press counts.
                     if (e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 0) centerDown = true
                     else if (e.type == KeyEventType.KeyUp) {
-                        if (centerDown) onClose()
+                        // OK on the slider: the next speed (it stays open).
+                        if (centerDown) {
+                            PlayerController.setSpeed(nextSpeed(PlayerController.ui.value.speed))
+                            onTouch()
+                        }
                         centerDown = false
                     }
                     return@onKeyEvent true
@@ -961,6 +1007,43 @@ private fun CaptionsDialog(onDismiss: () -> Unit) {
                 )
                 TvButton("Mở cài đặt giọng đọc", LucIcons.Download) { VoiceOver.openVoiceSettings(context) }
             }
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { first.requestFocus() }
+    }
+}
+
+/** "Hẹn giờ tắt": pauses after a while or at the end of this video. */
+@Composable
+private fun SleepDialog(onDismiss: () -> Unit) {
+    val c = Luc.colors
+    val sleepAt by PlayerController.sleepAt.collectAsStateWithLifecycle()
+    val first = remember { FocusRequester() }
+    vn.lucbao.tv.ui.TvGlassDialog(onDismiss = onDismiss) {
+        Column(
+            Modifier.width(340.dp).tvGlass().padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Hẹn giờ tắt", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            listOf(15 to "15 phút", 30 to "30 phút", 45 to "45 phút", 60 to "1 giờ", 90 to "1 giờ 30 phút", -1 to "Khi hết video này")
+                .forEachIndexed { i, (m, label) ->
+                    TvButton(
+                        label, LucIcons.Timer, selected = m == -1 && sleepAt == -1L,
+                        modifier = Modifier.fillMaxWidth(), focusRequester = if (i == 0) first else null
+                    ) {
+                        PlayerController.setSleepTimer(m)
+                        onDismiss()
+                    }
+                }
+            if (sleepAt != 0L) {
+                TvButton("Tắt hẹn giờ", LucIcons.Close, modifier = Modifier.fillMaxWidth()) {
+                    PlayerController.setSleepTimer(0)
+                    onDismiss()
+                }
+            }
+            Text("Hết giờ thì video tạm dừng.", color = c.muted, fontSize = 12.sp)
         }
     }
     LaunchedEffect(Unit) {

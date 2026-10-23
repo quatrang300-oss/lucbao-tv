@@ -55,6 +55,7 @@ fun TvLibrary(onPlay: (Video) -> Unit, onSearch: () -> Unit) {
     val history by Library.history.collectAsStateWithLifecycle()
     val favorites by Library.favorites.collectAsStateWithLifecycle()
     val channels by Library.channels.collectAsStateWithLifecycle()
+    val watchLater by Library.watchLater.collectAsStateWithLifecycle()
     val firstFocus = remember { FocusRequester() }
     var unfollow by remember { mutableStateOf<Channel?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -63,11 +64,11 @@ fun TvLibrary(onPlay: (Video) -> Unit, onSearch: () -> Unit) {
 
     LaunchedEffect(refocus) {
         delay(if (refocus == 0) 100 else 150)
-        if (history.isNotEmpty() || favorites.isNotEmpty()) firstFocus.focusIfVisible()
+        if (history.isNotEmpty() || favorites.isNotEmpty() || watchLater.isNotEmpty()) firstFocus.focusIfVisible()
         else actionFocus.focusIfVisible()
     }
 
-    val empty = history.isEmpty() && favorites.isEmpty() && channels.isEmpty()
+    val empty = history.isEmpty() && favorites.isEmpty() && channels.isEmpty() && watchLater.isEmpty()
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 28.dp, bottom = 40.dp)) {
         item(key = "title") {
@@ -119,6 +120,23 @@ fun TvLibrary(onPlay: (Video) -> Unit, onSearch: () -> Unit) {
                 }
             }
         }
+        if (watchLater.isNotEmpty()) {
+            item(key = "later") {
+                Section("Xem sau") {
+                    LazyRow(
+                        contentPadding = PaddingValues(start = 24.dp, end = TvEdge, top = 10.dp, bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(18.dp)
+                    ) {
+                        itemsIndexed(watchLater, key = { i, w -> "w$i-${w.video.url}" }) { i, w ->
+                            TvCard(
+                                w.video, onClick = { onPlay(w.video) },
+                                focusRequester = if (i == 0 && history.isEmpty()) firstFocus else null
+                            )
+                        }
+                    }
+                }
+            }
+        }
         if (favorites.isNotEmpty()) {
             item(key = "fav") {
                 Section("Yêu thích") {
@@ -129,7 +147,7 @@ fun TvLibrary(onPlay: (Video) -> Unit, onSearch: () -> Unit) {
                         itemsIndexed(favorites, key = { i, f -> "f$i-${f.video.url}" }) { i, f ->
                             TvCard(
                                 f.video, onClick = { onPlay(f.video) },
-                                focusRequester = if (i == 0 && history.isEmpty()) firstFocus else null
+                                focusRequester = if (i == 0 && history.isEmpty() && watchLater.isEmpty()) firstFocus else null
                             )
                         }
                     }
@@ -146,7 +164,7 @@ fun TvLibrary(onPlay: (Video) -> Unit, onSearch: () -> Unit) {
                         itemsIndexed(channels, key = { _, ch -> "c-${ch.url}" }) { i, ch ->
                             TvButton(
                                 ch.name.ifBlank { "Kênh" }, LucIcons.Check, selected = true,
-                                focusRequester = if (i == 0 && history.isEmpty() && favorites.isEmpty()) actionFocus else null
+                                focusRequester = if (i == 0 && history.isEmpty() && favorites.isEmpty() && watchLater.isEmpty()) actionFocus else null
                             ) { unfollow = ch }
                         }
                     }
