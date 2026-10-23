@@ -28,6 +28,12 @@ data class Settings(
     val tabLibrary: Boolean = true,
     /** TV only: "Đang theo dõi" in the left column */
     val tabFollowing: Boolean = true,
+    /** SponsorBlock: which parts of a video to skip by themselves */
+    val sbSponsor: Boolean = true,
+    val sbSelfPromo: Boolean = true,
+    val sbInteraction: Boolean = true,
+    val sbIntroOutro: Boolean = false,
+    val sbMusicOfftopic: Boolean = false,
 )
 
 object Prefs {
@@ -53,6 +59,11 @@ object Prefs {
             tabMusic = sp.getBoolean("tabMusic", true),
             tabLibrary = sp.getBoolean("tabLibrary", true),
             tabFollowing = sp.getBoolean("tabFollowing", true),
+            sbSponsor = sp.getBoolean("sbSponsor", true),
+            sbSelfPromo = sp.getBoolean("sbSelfPromo", true),
+            sbInteraction = sp.getBoolean("sbInteraction", true),
+            sbIntroOutro = sp.getBoolean("sbIntroOutro", false),
+            sbMusicOfftopic = sp.getBoolean("sbMusicOfftopic", false),
         )
     }
 
@@ -74,6 +85,11 @@ object Prefs {
             .putBoolean("tabMusic", s.tabMusic)
             .putBoolean("tabLibrary", s.tabLibrary)
             .putBoolean("tabFollowing", s.tabFollowing)
+            .putBoolean("sbSponsor", s.sbSponsor)
+            .putBoolean("sbSelfPromo", s.sbSelfPromo)
+            .putBoolean("sbInteraction", s.sbInteraction)
+            .putBoolean("sbIntroOutro", s.sbIntroOutro)
+            .putBoolean("sbMusicOfftopic", s.sbMusicOfftopic)
             .apply()
     }
 }
